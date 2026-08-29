@@ -119,6 +119,7 @@ namespace umbriel {
       m_output = nullptr;
       m_scrollWorkspace = nullptr;
       m_switchGroup = nullptr;
+      m_scrollSource = ScrollSource::None;
       m_state = State::Idle;
     }
   }
@@ -144,6 +145,72 @@ namespace umbriel {
     case State::Idle:
       m_state = State::Idle;
       break;
+    }
+  }
+
+  bool Gestures::beginScroll(Workspace* workspace, double factor, ScrollSource source) {
+    ScrollingLayout* scrolling = workspace != nullptr ? workspace->scrollingLayout() : nullptr;
+    if (scrolling == nullptr || scrolling->columns().empty()) {
+      return false;
+    }
+    m_scrollWorkspace = workspace;
+    m_viewportPrimary = workspace->scrollViewportExtent();
+    m_scrollStart = scrolling->scroll();
+    m_scrollTracker.reset();
+    m_scrollStartCentered = scrolling->centeredRest();
+    m_scrollFactor = factor;
+    m_scrollVertical = workspace->scrollingVertical();
+    m_scrollSource = source;
+    workspace->markArrange(false);
+    m_state = State::Scroll;
+    return true;
+  }
+
+  void Gestures::updateScroll(double delta, uint32_t timeMsec) {
+    if (m_state != State::Scroll || m_scrollWorkspace == nullptr) {
+      return;
+    }
+    Output* out = m_server->outputFromWlr(m_server->preferredOutput());
+    if (out == nullptr || out->workspaceGroup() == nullptr || out->workspaceGroup()->active() != m_scrollWorkspace) {
+      m_state = State::Idle;
+      m_scrollWorkspace = nullptr;
+      return;
+    }
+    ScrollingLayout* scrolling = m_scrollWorkspace->scrollingLayout();
+    if (scrolling == nullptr) {
+      m_state = State::Idle;
+      m_scrollWorkspace = nullptr;
+      return;
+    }
+    m_scrollTracker.push(delta, timeMsec);
+    scrolling->setScroll(m_scrollStart - m_scrollTracker.pos() * scrollNormFactor());
+    m_scrollWorkspace->markArrange(false);
+  }
+
+  bool Gestures::beginPointerScroll() {
+    if (m_server->sessionLocked()) {
+      return false;
+    }
+    if (m_state != State::Idle) {
+      cancelActive();
+    }
+    if (Overview* overview = m_server->overview(); overview != nullptr && overview->active()) {
+      return false;
+    }
+    Output* output = m_server->outputFromWlr(m_server->preferredOutput());
+    Workspace* workspace =
+        output != nullptr && output->workspaceGroup() != nullptr ? output->workspaceGroup()->active() : nullptr;
+    m_output = output;
+    return beginScroll(workspace, 1.0, ScrollSource::Pointer);
+  }
+
+  void Gestures::updatePointerScroll(double dx, double dy, uint32_t timeMsec) {
+    updateScroll(m_scrollVertical ? dy : dx, timeMsec);
+  }
+
+  void Gestures::endPointerScroll(bool cancelled, uint32_t timeMsec) {
+    if (m_state == State::Scroll) {
+      finishScroll(cancelled, timeMsec);
     }
   }
 
@@ -177,6 +244,9 @@ namespace umbriel {
     m_server->cancelModifierTap();
     if (m_server->sessionLocked()) {
       silentCancel();
+      return;
+    }
+    if (m_state == State::Scroll && m_scrollSource == ScrollSource::Pointer) {
       return;
     }
     if (m_state != State::Idle) {
@@ -213,6 +283,9 @@ namespace umbriel {
     m_server->notifyInputActivity();
     if (m_server->sessionLocked()) {
       silentCancel();
+      return;
+    }
+    if (m_state == State::Scroll && m_scrollSource == ScrollSource::Pointer) {
       return;
     }
 
@@ -264,13 +337,11 @@ namespace umbriel {
           m_state = State::Idle;
           return;
         }
-        m_scrollWorkspace = ws;
-        m_viewportPrimary = ws->scrollViewportExtent();
-        m_scrollStart = scrolling->scroll();
-        m_scrollTracker.reset();
-        m_scrollStartCentered = scrolling->centeredRest();
-        ws->markArrange(false);
-        m_state = State::Scroll;
+        if (!beginScroll(
+                ws, static_cast<double>(ws->scrollViewportExtent()) / kViewGestureMovementPx, ScrollSource::Swipe
+            )) {
+          m_state = State::Idle;
+        }
       } else {
         // Vertical lock switches workspaces.
         WorkspaceGroup* group = out->workspaceGroup();
@@ -291,24 +362,9 @@ namespace umbriel {
     }
 
     case State::Scroll: {
-      // Abort if active workspace changed under us.
-      Output* out = m_server->outputFromWlr(m_server->preferredOutput());
-      if (out == nullptr || out->workspaceGroup() == nullptr || out->workspaceGroup()->active() != m_scrollWorkspace) {
-        m_state = State::Idle;
-        m_scrollWorkspace = nullptr;
-        return;
-      }
-      ScrollingLayout* scrolling = m_scrollWorkspace->scrollingLayout();
-      if (scrolling == nullptr) {
-        m_state = State::Idle;
-        return;
-      }
       // Natural: fingers left → content moves left → scroll increases. The strip follows the
       // fingers unclamped, past the strip edges included; the release resolves the overscroll.
-      m_scrollTracker.push(event->dx, event->time_msec);
-      const double target = m_scrollStart - m_scrollTracker.pos() * scrollNormFactor();
-      scrolling->setScroll(target);
-      m_scrollWorkspace->markArrange(false);
+      updateScroll(event->dx, event->time_msec);
       return;
     }
 
@@ -391,6 +447,9 @@ namespace umbriel {
       silentCancel();
       return;
     }
+    if (m_state == State::Scroll && m_scrollSource == ScrollSource::Pointer) {
+      return;
+    }
 
     switch (m_state) {
     case State::Forward:
@@ -446,10 +505,11 @@ namespace umbriel {
 
   // ===== Scroll finish (Step 5) =====
 
-  double Gestures::scrollNormFactor() const { return static_cast<double>(m_viewportPrimary) / kViewGestureMovementPx; }
+  double Gestures::scrollNormFactor() const { return m_scrollFactor; }
 
   void Gestures::finishScroll(bool cancelled, uint32_t timeMsec) {
     m_state = State::Idle;
+    m_scrollSource = ScrollSource::None;
     if (m_scrollWorkspace == nullptr) {
       return;
     }
