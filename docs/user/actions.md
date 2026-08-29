@@ -121,6 +121,9 @@ not move the cursor. `window-focus:<id>` remains focus-only, while
 - **Scroll the viewport:** `layout-scroll-left`, `layout-scroll-right`. Scroll
   the active workspace's scrolling-layout viewport. `layout-scroll-up` and
   `layout-scroll-down` are first-class synonyms for left and right.
+- **Drag the viewport:** `layout-scroll-drag`. Bind this to a modified mouse
+  button to pan the active scrolling layout until that button is released.
+  Horizontal and vertical scrolling layouts follow their respective axes.
 
 ### Configuration
 

@@ -69,6 +69,7 @@ namespace umbriel {
     WindowMoveToWorkspacePrevious,
     ConfigReload,
     KeyboardLayoutNext,
+    LayoutScrollDrag,
     LayoutScrollLeft,
     LayoutScrollRight,
     LayoutScrollUp,
