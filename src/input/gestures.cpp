@@ -1,6 +1,5 @@
 #include "input/gestures.h"
 
-#include "config/config.h"
 #include "input/cursor.h"
 #include "input/seat.h"
 #include "layout/scrolling.h"
@@ -33,6 +32,17 @@ namespace umbriel {
     constexpr double kOverviewStepPx = kSwitchDistancePx * kCommitProgress;
     // Finger travel that scrolls the strip by one viewport width.
     constexpr double kViewGestureMovementPx = 1200.0;
+
+    int touchpadGestureDirection(wlr_pointer* pointer) {
+      if (pointer == nullptr || !wlr_input_device_is_libinput(&pointer->base)) {
+        return 1;
+      }
+      libinput_device* device = wlr_libinput_get_device_handle(&pointer->base);
+      if (device == nullptr || libinput_device_config_scroll_has_natural_scroll(device) == 0) {
+        return 1;
+      }
+      return libinput_device_config_scroll_get_natural_scroll_enabled(device) != 0 ? 1 : -1;
+    }
   } // namespace
 
   // trampolines (same pattern as Cursor)
@@ -148,7 +158,7 @@ namespace umbriel {
     }
   }
 
-  bool Gestures::beginScroll(Workspace* workspace, double factor, ScrollSource source) {
+  bool Gestures::beginScroll(Workspace* workspace, double scale, ScrollSource source) {
     ScrollingLayout* scrolling = workspace != nullptr ? workspace->scrollingLayout() : nullptr;
     if (scrolling == nullptr || scrolling->columns().empty()) {
       return false;
@@ -158,7 +168,7 @@ namespace umbriel {
     m_scrollStart = scrolling->scroll();
     m_scrollTracker.reset();
     m_scrollStartCentered = scrolling->centeredRest();
-    m_scrollFactor = factor;
+    m_scrollScale = scale;
     m_scrollVertical = workspace->scrollingVertical();
     m_scrollSource = source;
     workspace->markArrange(false);
@@ -170,20 +180,18 @@ namespace umbriel {
     if (m_state != State::Scroll || m_scrollWorkspace == nullptr) {
       return;
     }
-    Output* out = m_server->outputFromWlr(m_server->preferredOutput());
-    if (out == nullptr || out->workspaceGroup() == nullptr || out->workspaceGroup()->active() != m_scrollWorkspace) {
-      m_state = State::Idle;
-      m_scrollWorkspace = nullptr;
+    WorkspaceGroup* group = m_output != nullptr ? m_output->workspaceGroup() : nullptr;
+    if (group == nullptr || group->active() != m_scrollWorkspace) {
+      finishScroll(true, timeMsec);
       return;
     }
     ScrollingLayout* scrolling = m_scrollWorkspace->scrollingLayout();
     if (scrolling == nullptr) {
-      m_state = State::Idle;
-      m_scrollWorkspace = nullptr;
+      finishScroll(true, timeMsec);
       return;
     }
     m_scrollTracker.push(delta, timeMsec);
-    scrolling->setScroll(m_scrollStart - m_scrollTracker.pos() * scrollNormFactor());
+    scrolling->setScroll(m_scrollStart - m_scrollTracker.pos() * m_scrollScale);
     m_scrollWorkspace->markArrange(false);
   }
 
@@ -201,15 +209,21 @@ namespace umbriel {
     Workspace* workspace =
         output != nullptr && output->workspaceGroup() != nullptr ? output->workspaceGroup()->active() : nullptr;
     m_output = output;
-    return beginScroll(workspace, 1.0, ScrollSource::Pointer);
+    if (!beginScroll(workspace, 1.0, ScrollSource::Pointer)) {
+      m_output = nullptr;
+      return false;
+    }
+    return true;
   }
 
   void Gestures::updatePointerScroll(double dx, double dy, uint32_t timeMsec) {
-    updateScroll(m_scrollVertical ? dy : dx, timeMsec);
+    if (m_state == State::Scroll && m_scrollSource == ScrollSource::Pointer) {
+      updateScroll(m_scrollVertical ? dy : dx, timeMsec);
+    }
   }
 
   void Gestures::endPointerScroll(bool cancelled, uint32_t timeMsec) {
-    if (m_state == State::Scroll) {
+    if (m_state == State::Scroll && m_scrollSource == ScrollSource::Pointer) {
       finishScroll(cancelled, timeMsec);
     }
   }
@@ -264,6 +278,7 @@ namespace umbriel {
       return;
     }
     if (event->fingers == 3) {
+      m_naturalScrollDirection = touchpadGestureDirection(event->pointer);
       // Which of the three-finger gestures this is (scroll, switch, or an
       // overview row step) is decided once the axis locks, not here.
       m_state = State::Pending;
@@ -337,9 +352,9 @@ namespace umbriel {
           m_state = State::Idle;
           return;
         }
-        if (!beginScroll(
-                ws, static_cast<double>(ws->scrollViewportExtent()) / kViewGestureMovementPx, ScrollSource::Swipe
-            )) {
+        const double scale =
+            static_cast<double>(ws->scrollViewportExtent()) / kViewGestureMovementPx * m_naturalScrollDirection;
+        if (!beginScroll(ws, scale, ScrollSource::Swipe)) {
           m_state = State::Idle;
         }
       } else {
@@ -379,7 +394,7 @@ namespace umbriel {
       }
       m_accumY += event->dy;
       // Natural: swipe up (negative dy) → next workspace (positive progress).
-      double p = -m_accumY / kSwitchDistancePx;
+      double p = -m_accumY / kSwitchDistancePx * m_naturalScrollDirection;
       const double lo = m_hasPrev ? -1.0 : 0.0;
       const double hi = m_hasNext ? 1.0 : 0.0;
       if (p < lo) {
@@ -389,7 +404,7 @@ namespace umbriel {
         p = std::min(hi + (p - hi) * kOverscrollCompress, hi + kOverscrollMaxWs);
       }
       const uint32_t dt = std::max(1U, event->time_msec - m_lastTimeMsec);
-      m_velocity = 0.75 * m_velocity + 0.25 * (-event->dy / static_cast<double>(dt));
+      m_velocity = 0.75 * m_velocity + 0.25 * (-event->dy / static_cast<double>(dt) * m_naturalScrollDirection);
       m_lastTimeMsec = event->time_msec;
       m_progress = p;
       m_switchGroup->slideApply(p);
@@ -407,11 +422,11 @@ namespace umbriel {
       // workspace. The leftover travel stays in m_accumY so one long swipe crosses several rows.
       while (m_accumY <= -kOverviewStepPx) {
         m_accumY += kOverviewStepPx;
-        overview->selectRelativeWorkspace(1, m_output);
+        overview->selectRelativeWorkspace(m_naturalScrollDirection, m_output);
       }
       while (m_accumY >= kOverviewStepPx) {
         m_accumY -= kOverviewStepPx;
-        overview->selectRelativeWorkspace(-1, m_output);
+        overview->selectRelativeWorkspace(-m_naturalScrollDirection, m_output);
       }
       return;
     }
@@ -505,24 +520,27 @@ namespace umbriel {
 
   // ===== Scroll finish (Step 5) =====
 
-  double Gestures::scrollNormFactor() const { return m_scrollFactor; }
-
   void Gestures::finishScroll(bool cancelled, uint32_t timeMsec) {
+    Workspace* workspace = m_scrollWorkspace;
+    Output* output = m_output;
     m_state = State::Idle;
     m_scrollSource = ScrollSource::None;
-    if (m_scrollWorkspace == nullptr) {
+    m_scrollWorkspace = nullptr;
+    m_output = nullptr;
+    if (workspace == nullptr) {
       return;
     }
-    ScrollingLayout* scrolling = m_scrollWorkspace->scrollingLayout();
+    ScrollingLayout* scrolling = workspace->scrollingLayout();
     if (scrolling == nullptr) {
-      m_state = State::Idle;
-      m_scrollWorkspace = nullptr;
       return;
+    }
+    WorkspaceGroup* group = output != nullptr ? output->workspaceGroup() : nullptr;
+    if (group == nullptr || group->active() != workspace) {
+      cancelled = true;
     }
     if (cancelled) {
       scrolling->setScroll(m_scrollStart, m_scrollStartCentered);
-      m_scrollWorkspace->markArrange(true);
-      m_scrollWorkspace = nullptr;
+      workspace->markArrange(true);
       return;
     }
 
@@ -530,10 +548,9 @@ namespace umbriel {
     // reading the tracker.
     m_scrollTracker.push(0.0, timeMsec);
 
-    const double factor = scrollNormFactor();
     const double currentScroll = scrolling->scroll();
     // Where the swipe would coast to a stop under deceleration.
-    const double projected = m_scrollStart - m_scrollTracker.projectedEndPos() * factor;
+    const double projected = m_scrollStart - m_scrollTracker.projectedEndPos() * m_scrollScale;
 
     const auto maxScroll = static_cast<double>(scrolling->maxScroll(m_viewportPrimary));
     const auto columnCount = static_cast<int>(scrolling->columns().size());
@@ -586,9 +603,8 @@ namespace umbriel {
     }
 
     if (best < 0) {
-      m_scrollWorkspace->ensureFocusedVisible();
-      m_scrollWorkspace->markArrange(true);
-      m_scrollWorkspace = nullptr;
+      workspace->ensureFocusedVisible();
+      workspace->markArrange(true);
       return;
     }
 
@@ -596,19 +612,18 @@ namespace umbriel {
     // re-deriving an anchor from the overscrolled position.
     scrolling->setScroll(bestSnap);
 
-    View* focused = m_scrollWorkspace->focusedView();
+    View* focused = workspace->focusedView();
     if (focused != nullptr && scrolling->columnOf(focused) == best) {
       // Snap back / settle: target column already focused.
-      m_scrollWorkspace->ensureFocusedVisible();
-      m_scrollWorkspace->markArrange(true);
+      workspace->ensureFocusedVisible();
+      workspace->markArrange(true);
     } else if (!scrolling->columns()[static_cast<size_t>(best)].views.empty()) {
       View* target = scrolling->columns()[static_cast<size_t>(best)].views.front();
       m_server->focusView(target, FocusReason::Directional);
     } else {
-      m_scrollWorkspace->ensureFocusedVisible();
-      m_scrollWorkspace->markArrange(true);
+      workspace->ensureFocusedVisible();
+      workspace->markArrange(true);
     }
-    m_scrollWorkspace = nullptr;
   }
 
   // ===== Switch finish (Step 6) =====

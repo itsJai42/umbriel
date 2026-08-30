@@ -5,9 +5,12 @@
 using umbriel::anchoredContentOrigin;
 using umbriel::centeredOrigin;
 using umbriel::clampFloatingOrigin;
+using umbriel::floatingFractionSize;
 using umbriel::FloatingGeometry;
 using umbriel::floatingKeepVisible;
 using umbriel::FloatingPoint;
+using umbriel::floatingSizeFraction;
+using umbriel::nextFractionPreset;
 using umbriel::serialSettled;
 
 namespace {
@@ -43,7 +46,7 @@ UMBRIEL_TEST(noOutstandingRequestIsAlwaysSettled) {
 
 UMBRIEL_TEST(aRequestBlocksUntilTheClientCatchesUp) {
   FloatingGeometry floating;
-  floating.recordSizeRequest(50);
+  floating.recordSizeRequest(300, 200, 50);
   CHECK(!floating.retireSizeRequestIfSettled(49));
   // Still outstanding, so a second early commit is still refused.
   CHECK(!floating.retireSizeRequestIfSettled(49));
@@ -52,10 +55,41 @@ UMBRIEL_TEST(aRequestBlocksUntilTheClientCatchesUp) {
   CHECK(floating.retireSizeRequestIfSettled(0));
 }
 
+UMBRIEL_TEST(aFullySpecifiedRequestIsPendingUntilTheClientCommitsIt) {
+  FloatingGeometry floating;
+  floating.recordSizeRequest(300, 200, 50);
+  CHECK(floating.pendingSize().has_value());
+  CHECK_EQ((*floating.pendingSize())[0], 300);
+  CHECK_EQ((*floating.pendingSize())[1], 200);
+  // The client lags: the pending size is what resize actions accumulate against.
+  CHECK(!floating.retireSizeRequestIfSettled(49));
+  CHECK(floating.pendingSize().has_value());
+  CHECK(floating.retireSizeRequestIfSettled(50));
+  // Retired: the client owns its size again and the basis falls back to it.
+  CHECK(!floating.pendingSize().has_value());
+}
+
+UMBRIEL_TEST(aClientPreferenceRequestLeavesNoPendingSize) {
+  // A configure with a 0 axis lets the client pick that axis: nothing is
+  // pending, though the serial still gates ownership handback.
+  FloatingGeometry floating;
+  floating.recordSizeRequest(0, 0, 5);
+  CHECK(!floating.pendingSize().has_value());
+  CHECK(!floating.retireSizeRequestIfSettled(4));
+  CHECK(floating.retireSizeRequestIfSettled(5));
+}
+
+UMBRIEL_TEST(clearSizeRequestDropsThePendingSize) {
+  FloatingGeometry floating;
+  floating.recordSizeRequest(300, 200, 5);
+  floating.clearSizeRequest();
+  CHECK(!floating.pendingSize().has_value());
+}
+
 UMBRIEL_TEST(settlingARequestDropsTheAnchorWhenNotResizing) {
   FloatingGeometry floating;
   floating.beginResize({10, 20, 300, 200}, WLR_EDGE_LEFT);
-  floating.recordSizeRequest(7);
+  floating.recordSizeRequest(300, 200, 7);
   floating.endResize(); // pointer released, but a configure is still in flight
   CHECK(floating.anchor().has_value());
 
@@ -68,7 +102,7 @@ UMBRIEL_TEST(settlingARequestDropsTheAnchorWhenNotResizing) {
 UMBRIEL_TEST(anchorSurvivesWhileTheResizeIsStillUnderThePointer) {
   FloatingGeometry floating;
   floating.beginResize({10, 20, 300, 200}, WLR_EDGE_TOP);
-  floating.recordSizeRequest(7);
+  floating.recordSizeRequest(300, 200, 7);
 
   CHECK(floating.retireSizeRequestIfSettled(7));
   // More configures are coming; dropping the anchor now would let the far edge
@@ -80,7 +114,7 @@ UMBRIEL_TEST(anchorSurvivesWhileTheResizeIsStillUnderThePointer) {
 UMBRIEL_TEST(endResizeKeepsTheAnchorWhileAConfigureIsInFlight) {
   FloatingGeometry floating;
   floating.beginResize({10, 20, 300, 200}, WLR_EDGE_LEFT);
-  floating.recordSizeRequest(9);
+  floating.recordSizeRequest(300, 200, 9);
   floating.endResize();
   CHECK(floating.anchor().has_value());
 }
@@ -249,6 +283,75 @@ UMBRIEL_TEST(centeringHonoursAnOffsetUsableArea) {
   const FloatingPoint origin = centeredOrigin(usable, 800, 600);
   CHECK_EQ(origin.x, 1920 + 560);
   CHECK_EQ(origin.y, 40 + 220);
+}
+
+// Fraction sizing (window_rule.default_width / default_height on floats)
+UMBRIEL_TEST(aFractionOfTheUsableAxisBecomesPixels) {
+  CHECK_EQ(floatingFractionSize(0.5, 1920), 960);
+  CHECK_EQ(floatingFractionSize(0.5, 1080), 540);
+  CHECK_EQ(floatingFractionSize(0.1, 1920), 192);
+  CHECK_EQ(floatingFractionSize(1.0, 1920), 1920);
+}
+
+UMBRIEL_TEST(aDegenerateUsableAxisLeavesTheChoiceToTheClient) {
+  CHECK_EQ(floatingFractionSize(0.5, 0), 0);
+  CHECK_EQ(floatingFractionSize(0.5, -1), 0);
+}
+
+UMBRIEL_TEST(aFractionRoundsRatherThanTruncates) {
+  // Layout::fractionalWidth rounds, so a float and a tiled lane at the same
+  // fraction must not disagree by a pixel when the usable axis is odd, which a
+  // layer-shell exclusive zone readily produces.
+  CHECK_EQ(floatingFractionSize(0.5, 1281), 641);
+  CHECK_EQ(floatingFractionSize(0.5, 719), 360);
+  CHECK_EQ(floatingFractionSize(0.75, 1366), 1025);
+}
+UMBRIEL_TEST(fractionPixelsStayWithinTheAxis) {
+  // Defensive: parse clamps fractions to [0.1, 1.0], but the arithmetic result
+  // never leaves the usable axis and never collapses to 0.
+  CHECK_EQ(floatingFractionSize(0.0001, 100), 1);
+  CHECK_EQ(floatingFractionSize(1.5, 800), 800);
+}
+
+UMBRIEL_TEST(aSizeReadsBackAsTheFractionItCameFrom) {
+  CHECK(floatingSizeFraction(960, 1920) == 0.5);
+  CHECK(floatingSizeFraction(192, 1920) == 0.1);
+}
+
+// Preset cycling (window-cycle-width/-height on floats)
+UMBRIEL_TEST(cyclingForwardPicksTheNextLargerPreset) {
+  const std::vector<double> presets{1.0 / 3, 0.5, 2.0 / 3};
+  CHECK(nextFractionPreset(presets, 0.4, 1) == 0.5);
+  CHECK(nextFractionPreset(presets, 0.5, 1) == 2.0 / 3);
+}
+
+UMBRIEL_TEST(cyclingForwardWrapsToTheSmallestPreset) {
+  const std::vector<double> presets{1.0 / 3, 0.5, 2.0 / 3};
+  CHECK(nextFractionPreset(presets, 0.9, 1) == 1.0 / 3);
+}
+
+UMBRIEL_TEST(cyclingBackwardPicksTheNextSmallerPreset) {
+  const std::vector<double> presets{1.0 / 3, 0.5, 2.0 / 3};
+  CHECK(nextFractionPreset(presets, 0.6, -1) == 0.5);
+  CHECK(nextFractionPreset(presets, 0.4, -1) == 1.0 / 3);
+}
+
+UMBRIEL_TEST(cyclingBackwardWrapsToTheLargestPreset) {
+  const std::vector<double> presets{1.0 / 3, 0.5, 2.0 / 3};
+  CHECK(nextFractionPreset(presets, 0.2, -1) == 2.0 / 3);
+}
+
+UMBRIEL_TEST(anExactPresetCyclesPastItself) {
+  // The epsilon guard: a window sitting exactly on a preset moves to the next
+  // one instead of re-selecting its own size.
+  const std::vector<double> presets{1.0 / 3, 0.5, 2.0 / 3};
+  CHECK(nextFractionPreset(presets, 0.5, -1) == 1.0 / 3);
+  CHECK(nextFractionPreset(presets, 0.5, 1) == 2.0 / 3);
+}
+
+UMBRIEL_TEST(cyclingWithoutPresetsKeepsTheCurrentFraction) {
+  CHECK(nextFractionPreset({}, 0.42, 1) == 0.42);
+  CHECK(nextFractionPreset({}, 0.42, -1) == 0.42);
 }
 
 int main() { return RUN_TESTS(); }

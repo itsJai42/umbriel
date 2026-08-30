@@ -42,12 +42,7 @@ namespace umbriel {
       return error == std::errc{} && end == name.data() + name.size() ? index : std::numeric_limits<size_t>::max();
     }
 
-    View* viewForSurface(Server& server, wlr_surface* surface) {
-      if (surface == nullptr) {
-        return nullptr;
-      }
-      wlr_surface* root = wlr_surface_get_root_surface(surface);
-      wlr_xdg_toplevel* toplevel = wlr_xdg_toplevel_try_from_wlr_surface(root);
+    View* viewForToplevel(Server& server, wlr_xdg_toplevel* toplevel) {
       if (toplevel == nullptr) {
         return nullptr;
       }
@@ -57,6 +52,14 @@ namespace umbriel {
         }
       }
       return nullptr;
+    }
+
+    View* viewForSurface(Server& server, wlr_surface* surface) {
+      if (surface == nullptr) {
+        return nullptr;
+      }
+      wlr_surface* root = wlr_surface_get_root_surface(surface);
+      return viewForToplevel(server, wlr_xdg_toplevel_try_from_wlr_surface(root));
     }
 
     pid_t surfaceClientPid(wlr_surface* surface) {
@@ -275,7 +278,26 @@ namespace umbriel {
               override != nullptr && override->tap ? "input.device.tap" : "input.touchpad.tap", deviceName(device)
           );
         }
-
+        if ((libinput_device_config_send_events_get_modes(libinputDevice)
+             & LIBINPUT_CONFIG_SEND_EVENTS_DISABLED_ON_EXTERNAL_MOUSE)
+            != 0) {
+          const auto sendEventsMode = input.touchpad.disableOnExternalMouse.value_or(
+                                          libinput_device_config_send_events_get_default_mode(libinputDevice)
+                                          == LIBINPUT_CONFIG_SEND_EVENTS_DISABLED_ON_EXTERNAL_MOUSE
+                                      )
+              ? LIBINPUT_CONFIG_SEND_EVENTS_DISABLED_ON_EXTERNAL_MOUSE
+              : LIBINPUT_CONFIG_SEND_EVENTS_ENABLED;
+          if (libinput_device_config_send_events_set_mode(libinputDevice, sendEventsMode)
+              != LIBINPUT_CONFIG_STATUS_SUCCESS) {
+            kLog.warn("input: failed to apply input.touchpad.disable_on_external_mouse to '{}'", deviceName(device));
+          }
+        } else if (input.touchpad.disableOnExternalMouse) {
+          kLog.warn(
+              "input: could not apply input.touchpad.disable_on_external_mouse to '{}': device does not support "
+              "disabling on external mouse",
+              deviceName(device)
+          );
+        }
         const bool hasDwtOverride = override != nullptr && override->disableWhileTyping.has_value();
         const std::optional<bool>& dwt =
             hasDwtOverride ? override->disableWhileTyping : input.touchpad.disableWhileTyping;
@@ -348,8 +370,13 @@ namespace umbriel {
       }
     }
     if (effects.input) {
+      m_surfaceLayouts.clear();
       for (const auto& keyboard : m_keyboards) {
         keyboard->applyConfig();
+      }
+      if (m_keyboardLayoutSource != nullptr) {
+        syncKeyboardLayout(m_keyboardLayoutSource);
+        notifyKeyboardLayoutIpc();
       }
       for (const auto& pointer : m_pointers) {
         applyPointerConfig(pointer->device);
@@ -588,6 +615,9 @@ namespace umbriel {
     case WLR_INPUT_DEVICE_TABLET_PAD:
       self->addTabletPad(device);
       break;
+    case WLR_INPUT_DEVICE_SWITCH:
+      self->addSwitch(device);
+      break;
     default:
       break;
     }
@@ -598,6 +628,15 @@ namespace umbriel {
     Server* self;
     self = wl_container_of(listener, self, m_newXdgToplevel);
     self->m_registry.add(std::make_unique<View>(*self, static_cast<wlr_xdg_toplevel*>(data)));
+  }
+
+  void Server::onSetXdgToplevelTag(wl_listener* listener, void* data) {
+    Server* self;
+    self = wl_container_of(listener, self, m_setXdgToplevelTag);
+    const auto* event = static_cast<wlr_xdg_toplevel_tag_manager_v1_set_tag_event*>(data);
+    if (View* view = viewForToplevel(*self, event->toplevel)) {
+      view->setXdgTag(event->tag != nullptr ? event->tag : "");
+    }
   }
 
   void Server::onNewXdgPopup(wl_listener* /*listener*/, void* data) {
@@ -724,6 +763,7 @@ namespace umbriel {
     wlr_xdg_activation_token_v1* token = event->token;
     const char* tokenName = token != nullptr ? wlr_xdg_activation_token_v1_get_name(token) : nullptr;
     const auto* watch = token != nullptr ? static_cast<ActivationTokenWatch*>(token->data) : nullptr;
+    const bool trusted = watch != nullptr && (watch->compositorIssued || watch->inputBacked);
     const auto age = watch != nullptr
         ? std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - watch->createdAt)
               .count()
@@ -768,18 +808,22 @@ namespace umbriel {
     }
 
     for (const auto& entry : self->m_registry.all()) {
-      if (entry->toplevel() == toplevel && entry->mapped()) {
-        const bool focusOnActivate = entry->resolvedRules().focusOnActivate.value_or(config().general.focusOnActivate);
-        const bool alreadyFocused = entry->workspace() != nullptr
-            && entry->workspace()->active()
-            && entry->workspace()->focusedView() == entry.get();
+      if (entry->toplevel() == toplevel) {
+        const std::optional<bool> rulePolicy = entry->resolvedRules().focusOnActivate;
+        const bool focusOnActivate = rulePolicy.value_or(trusted || config().general.focusOnActivate);
+        const bool alreadyFocused = entry->activated();
         kLog.debug(
-            "xdg-activation policy target_app_id='{}' focus_on_activate={} already_focused={} action={}",
-            entry->toplevel()->app_id != nullptr ? entry->toplevel()->app_id : "", focusOnActivate, alreadyFocused,
-            alreadyFocused ? "none" : (focusOnActivate ? "focus" : "urgent")
+            "xdg-activation policy target_app_id='{}' trusted={} compositor_issued={} input_backed={} mapped={} "
+            "focus_on_activate={} already_focused={} action={}",
+            entry->toplevel()->app_id != nullptr ? entry->toplevel()->app_id : "", trusted,
+            watch != nullptr && watch->compositorIssued, watch != nullptr && watch->inputBacked, entry->mapped(),
+            focusOnActivate, alreadyFocused,
+            alreadyFocused ? "none" : (entry->mapped() ? (focusOnActivate ? "focus" : "urgent") : "defer")
         );
         if (alreadyFocused) {
           entry->setUrgent(false);
+        } else if (!entry->mapped()) {
+          entry->deferActivation(trusted);
         } else if (focusOnActivate) {
           self->focusView(entry.get(), FocusReason::XdgActivation);
         } else {
@@ -794,12 +838,7 @@ namespace umbriel {
     Server* self;
     self = wl_container_of(listener, self, m_newActivationToken);
     auto* token = static_cast<wlr_xdg_activation_token_v1*>(data);
-    auto* watch = new ActivationTokenWatch{
-        .createdAt = std::chrono::steady_clock::now(),
-    };
-    watch->destroy.notify = onActivationTokenDestroy;
-    wl_signal_add(&token->events.destroy, &watch->destroy);
-    token->data = watch;
+    self->trackActivationToken(token, false);
 
     View* source = viewForSurface(*self, token->surface);
     const char* tokenName = wlr_xdg_activation_token_v1_get_name(token);
@@ -822,6 +861,17 @@ namespace umbriel {
             && wlr_surface_get_root_surface(self->m_seat->wlr()->pointer_state.focused_surface)
                 == wlr_surface_get_root_surface(token->surface)
     );
+  }
+
+  void Server::trackActivationToken(wlr_xdg_activation_token_v1* token, bool compositorIssued) {
+    auto* watch = new ActivationTokenWatch{
+        .createdAt = std::chrono::steady_clock::now(),
+        .compositorIssued = compositorIssued,
+        .inputBacked = !compositorIssued && token->seat != nullptr && token->surface != nullptr,
+    };
+    watch->destroy.notify = onActivationTokenDestroy;
+    wl_signal_add(&token->events.destroy, &watch->destroy);
+    token->data = watch;
   }
 
   void Server::onActivationTokenDestroy(wl_listener* listener, void* /*data*/) {
@@ -1050,34 +1100,86 @@ namespace umbriel {
   }
 
   void Server::addKeyboard(wlr_input_device* device) {
-    m_keyboards.push_back(std::make_unique<Keyboard>(*this, device));
+    wlr_seat* seat = m_seat->wlr();
+    const bool seatHasKeyboard = wlr_seat_get_keyboard(seat) != nullptr;
+    auto entry = std::make_unique<Keyboard>(*this, device);
+    Keyboard* keyboard = entry.get();
+    m_keyboards.push_back(std::move(entry));
+
+    if (!keyboard->virtualDevice()) {
+      if (m_keyboardLayoutSource == nullptr) {
+        m_keyboardLayoutSource = keyboard;
+      } else {
+        keyboard->syncLayoutFrom(*m_keyboardLayoutSource);
+      }
+      notifyKeyboardLayoutIpc();
+    }
+
+    // A virtual keyboard may arrive before its client provides a keymap. Keep
+    // an existing seat keyboard until real input selects another device, but an
+    // empty seat needs one for focus enter and input-method keymap delivery.
+    if (!seatHasKeyboard) {
+      wlr_seat_set_keyboard(seat, keyboard->wlr());
+    }
   }
 
   bool Server::cycleKeyboardLayout() {
-    bool switched = false;
-    for (const auto& keyboard : m_keyboards) {
-      switched = keyboard->cycleLayout() || switched;
+    if (m_keyboardLayoutSource != nullptr && m_keyboardLayoutSource->cycleLayout()) {
+      return true;
     }
-    return switched;
+    for (const auto& keyboard : m_keyboards) {
+      if (keyboard.get() != m_keyboardLayoutSource && keyboard->cycleLayout()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void Server::syncKeyboardLayout(Keyboard* source) {
+    for (const auto& keyboard : m_keyboards) {
+      if (keyboard.get() != source) {
+        keyboard->syncLayoutFrom(*source);
+      }
+    }
+  }
+
+  void Server::keyboardLayoutChanged(Keyboard* origin) {
+    m_keyboardLayoutSource = origin;
+    syncKeyboardLayout(origin);
+    notifyKeyboardLayoutIpc();
   }
 
   std::optional<Server::KeyboardLayoutState> Server::keyboardLayoutState() const {
-    for (const auto& keyboard : m_keyboards) {
-      wlr_keyboard* wlrKeyboard = keyboard->wlr();
-      if (keyboard->virtualDevice() || wlrKeyboard->keymap == nullptr || wlrKeyboard->xkb_state == nullptr) {
-        continue;
+    const Keyboard* source = m_keyboardLayoutSource;
+    auto usable = [](const Keyboard* keyboard) {
+      return keyboard != nullptr
+          && !keyboard->virtualDevice()
+          && keyboard->wlr()->keymap != nullptr
+          && keyboard->wlr()->xkb_state != nullptr;
+    };
+    if (!usable(source)) {
+      source = nullptr;
+      for (const auto& keyboard : m_keyboards) {
+        if (usable(keyboard.get())) {
+          source = keyboard.get();
+          break;
+        }
       }
-      KeyboardLayoutState state;
-      const xkb_layout_index_t count = xkb_keymap_num_layouts(wlrKeyboard->keymap);
-      state.names.reserve(count);
-      for (xkb_layout_index_t i = 0; i < count; ++i) {
-        const char* name = xkb_keymap_layout_get_name(wlrKeyboard->keymap, i);
-        state.names.emplace_back(name != nullptr ? name : "");
-      }
-      state.currentIndex = xkb_state_serialize_layout(wlrKeyboard->xkb_state, XKB_STATE_LAYOUT_EFFECTIVE);
-      return state;
     }
-    return std::nullopt;
+    if (source == nullptr) {
+      return std::nullopt;
+    }
+
+    wlr_keyboard* wlrKeyboard = source->wlr();
+    KeyboardLayoutState state;
+    const xkb_layout_index_t count = xkb_keymap_num_layouts(wlrKeyboard->keymap);
+    state.names.reserve(count);
+    for (xkb_layout_index_t i = 0; i < count; ++i) {
+      const char* name = xkb_keymap_layout_get_name(wlrKeyboard->keymap, i);
+      state.names.emplace_back(name != nullptr ? name : "");
+    }
+    state.currentIndex = xkb_state_serialize_layout(wlrKeyboard->xkb_state, XKB_STATE_LAYOUT_EFFECTIVE);
+    return state;
   }
 
   void Server::notifyKeyboardLayoutIpc() {
@@ -1141,6 +1243,50 @@ namespace umbriel {
       return entry.get() == watch;
     });
     server->updateSeatCapabilities();
+  }
+
+  void Server::addSwitch(wlr_input_device* device) {
+    auto entry = std::make_unique<SwitchDevice>();
+    entry->server = this;
+    entry->device = device;
+    entry->destroy.notify = onSwitchDestroy;
+    wl_signal_add(&device->events.destroy, &entry->destroy);
+    entry->toggle.notify = onSwitchToggle;
+    wl_signal_add(&wlr_switch_from_input_device(device)->events.toggle, &entry->toggle);
+    m_switchDevices.push_back(std::move(entry));
+    kLog.info("input: added switch device '{}'", deviceName(device));
+  }
+
+  void Server::onSwitchDestroy(wl_listener* listener, void* /*data*/) {
+    SwitchDevice* watch;
+    watch = wl_container_of(listener, watch, destroy);
+    Server* server = watch->server;
+    wl_list_remove(&watch->destroy.link);
+    wl_list_remove(&watch->toggle.link);
+    std::erase_if(server->m_switchDevices, [watch](const std::unique_ptr<SwitchDevice>& entry) {
+      return entry.get() == watch;
+    });
+  }
+
+  void Server::onSwitchToggle(wl_listener* listener, void* data) {
+    SwitchDevice* watch;
+    watch = wl_container_of(listener, watch, toggle);
+    const auto* event = static_cast<wlr_switch_toggle_event*>(data);
+    if (event->switch_type != WLR_SWITCH_TYPE_LID) {
+      return;
+    }
+    Server* server = watch->server;
+    if (event->switch_state == WLR_SWITCH_STATE_ON) {
+      kLog.info("lid closed");
+      if (!config().events.lidClose.empty()) {
+        server->spawn(config().events.lidClose.c_str(), "events.lid_close");
+      }
+    } else {
+      kLog.info("lid opened");
+      if (!config().events.lidOpen.empty()) {
+        server->spawn(config().events.lidOpen.c_str(), "events.lid_open");
+      }
+    }
   }
 
   void Server::addTablet(wlr_input_device* device) {
@@ -1504,6 +1650,8 @@ namespace umbriel {
             .workspaceName = workspace->name(),
             .layoutSnapshot = nullptr,
             .layoutMember = 0,
+            .ownsNamedScrollingColumnWidth = view->m_ownsNamedScrollingColumnWidth,
+            .pendingNamedScrollingColumnWidth = std::nullopt,
             .layoutModeOverride = workspace->layoutModeOverride(),
             .floatingOutputPosition = std::nullopt,
             .configGeneration = configStore().generation(),
@@ -1691,6 +1839,17 @@ namespace umbriel {
         first = last;
         continue;
       }
+      const auto applyPendingNamedScrollingColumnWidth = [workspace](View* view, const View::DisplacedHome& home) {
+        if (!home.pendingNamedScrollingColumnWidth || !view->namedScrollingColumnName()) {
+          return;
+        }
+        ScrollingLayout* scrolling = workspace->scrollingLayout();
+        const int column = scrolling != nullptr ? scrolling->columnOf(view) : -1;
+        if (column >= 0) {
+          scrolling->setWidthFraction(column, *home.pendingNamedScrollingColumnWidth);
+          workspace->markArrange(false);
+        }
+      };
 
       struct SnapshotCandidate {
         std::shared_ptr<const LayoutSnapshot> snapshot;
@@ -1751,7 +1910,9 @@ namespace umbriel {
       std::vector<View*> exactViews;
       if (exact != nullptr) {
         for (View* view : exact->views) {
+          const bool ownsNamedScrollingColumnWidth = view->displacedHome()->ownsNamedScrollingColumnWidth;
           view->setWorkspace(workspace, false);
+          view->m_ownsNamedScrollingColumnWidth = ownsNamedScrollingColumnWidth;
           if (view->workspace() == workspace && view->mapped() && view->tiled()) {
             exactViews.push_back(view);
           }
@@ -1801,6 +1962,9 @@ namespace umbriel {
           }
           workspace->markArrange(false);
         }
+        for (View* view : exactViews) {
+          applyPendingNamedScrollingColumnWidth(view, *view->displacedHome());
+        }
         restored += exactViews.size();
       }
 
@@ -1842,6 +2006,7 @@ namespace umbriel {
         if (moved) {
           view->setWorkspace(workspace);
         }
+        applyPendingNamedScrollingColumnWidth(view, home);
         if (floating && home.floatingOutputPosition && target != nullptr) {
           const wlr_box outputBox = target->layoutBox();
           if (outputBox.width > 0 && outputBox.height > 0) {
@@ -1954,8 +2119,88 @@ namespace umbriel {
     }
   }
 
+  bool Server::setKeyboardLayout(std::string_view layout) {
+    if (layout.empty()) {
+      return false;
+    }
+    Keyboard* source = nullptr;
+    if (m_keyboardLayoutSource != nullptr && m_keyboardLayoutSource->setLayoutByName(layout)) {
+      source = m_keyboardLayoutSource;
+    } else {
+      for (const auto& keyboard : m_keyboards) {
+        if (keyboard.get() != m_keyboardLayoutSource && keyboard->setLayoutByName(layout)) {
+          source = keyboard.get();
+          break;
+        }
+      }
+    }
+    if (source == nullptr) {
+      return false;
+    }
+    m_keyboardLayoutSource = source;
+    syncKeyboardLayout(source);
+    notifyKeyboardLayoutIpc();
+    return true;
+  }
+
+  void Server::notifyKeyboardEnter(wlr_surface* surface) {
+    wlr_seat* seat = m_seat->wlr();
+
+    if (config().input.keyboard.trackLayout == TrackLayout::Window) {
+      if (const auto state = keyboardLayoutState();
+          state.has_value() && state->currentIndex < state->names.size() && !state->names.empty()) {
+        const std::string_view current = state->names[state->currentIndex];
+        if (!current.empty()) {
+          m_surfaceLayouts.remember(seat->keyboard_state.focused_surface, current);
+          if (surface != nullptr) {
+            const std::optional<std::string_view> recalled = m_surfaceLayouts.recall(surface);
+            const std::string_view target = recalled.value_or(state->names.front());
+            if (!target.empty() && target != current) {
+              // Drop focus before changing the group so the outgoing client
+              // cannot receive the incoming surface's modifier state.
+              wlr_seat_keyboard_notify_clear_focus(seat);
+              if (!setKeyboardLayout(target) && recalled.has_value()) {
+                m_surfaceLayouts.forget(surface);
+                setKeyboardLayout(state->names.front());
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (wlr_keyboard* keyboard = wlr_seat_get_keyboard(seat)) {
+      wlr_seat_keyboard_notify_enter(seat, surface, keyboard->keycodes, keyboard->num_keycodes, &keyboard->modifiers);
+    } else {
+      wlr_seat_keyboard_notify_enter(seat, surface, nullptr, 0, nullptr);
+    }
+  }
+
+  void Server::notifyKeyboardClearFocus() {
+    wlr_seat* seat = m_seat->wlr();
+    // Remember what the outgoing surface was using, but leave the active layout
+    // alone because no incoming surface has a layout to restore.
+    if (config().input.keyboard.trackLayout == TrackLayout::Window) {
+      if (const auto state = keyboardLayoutState(); state.has_value() && state->currentIndex < state->names.size()) {
+        m_surfaceLayouts.remember(seat->keyboard_state.focused_surface, state->names[state->currentIndex]);
+      }
+    }
+    wlr_seat_keyboard_notify_clear_focus(seat);
+  }
+
   void Server::removeKeyboard(Keyboard* keyboard) {
+    const bool sourceRemoved = m_keyboardLayoutSource == keyboard;
     std::erase_if(m_keyboards, [keyboard](const std::unique_ptr<Keyboard>& entry) { return entry.get() == keyboard; });
+    if (sourceRemoved) {
+      m_keyboardLayoutSource = nullptr;
+      for (const auto& entry : m_keyboards) {
+        if (!entry->virtualDevice()) {
+          m_keyboardLayoutSource = entry.get();
+          break;
+        }
+      }
+      notifyKeyboardLayoutIpc();
+    }
     updateSeatCapabilities();
   }
 
@@ -1985,7 +2230,7 @@ namespace umbriel {
       scheduleDisplacedViewRestore();
     }
     if (hadKeyboardFocus) {
-      wlr_seat_keyboard_notify_clear_focus(m_seat->wlr());
+      notifyKeyboardClearFocus();
       if (replacement != nullptr) {
         focusView(replacement);
       } else {

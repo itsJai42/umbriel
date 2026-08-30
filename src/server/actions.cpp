@@ -5,6 +5,7 @@
 #include "input/seat.h"
 #include "layout/scrolling.h"
 #include "output/direction.h"
+#include "output/identity.h"
 #include "output/output.h"
 #include "overview/overview.h"
 #include "scene/cheatsheet.h"
@@ -189,10 +190,6 @@ namespace umbriel {
       if (focused == nullptr) {
         return false;
       }
-      if (source.layout().mode() == LayoutMode::Master) {
-        moveViewToWorkspace(server, *focused, target);
-        return true;
-      }
       const int columnIndex = source.layout().columnOf(focused);
       const auto& sourceColumns = source.layout().columns();
       if (columnIndex < 0 || columnIndex >= static_cast<int>(sourceColumns.size())) {
@@ -335,7 +332,7 @@ namespace umbriel {
     // Session
     bool actionSpawn(Server& server, const Keybind& bind, std::string* /*error*/) {
       const auto* arg = payloadIf<SpawnArg>(bind);
-      server.spawn(arg != nullptr ? arg->command.c_str() : "");
+      server.spawn(arg != nullptr ? arg->command.c_str() : "", nullptr, true);
       return true;
     }
 
@@ -365,7 +362,7 @@ namespace umbriel {
       bool changed = false;
       for (const auto& output : server.outputs()) {
         const char* name = output->wlr()->name;
-        if (!requested.empty() && (name == nullptr || requested != name)) {
+        if (!requested.empty() && outputNameMatch(output->identity(), requested) == OutputNameMatch::None) {
           continue;
         }
         found = true;
@@ -708,16 +705,19 @@ namespace umbriel {
       return true;
     }
 
-    bool actionConsumeLeft(Server& server, const Keybind& /*bind*/, std::string* /*error*/) {
+    template <int Direction> bool actionConsume(Server& server, const Keybind& /*bind*/, std::string* /*error*/) {
       if (Workspace* workspace = activeWorkspace(server)) {
-        workspace->consumeFocusedLeft();
+        workspace->consumeFocused(Direction);
       }
       return true;
     }
 
-    bool actionExpelRight(Server& server, const Keybind& /*bind*/, std::string* /*error*/) {
+    template <int Direction>
+    bool actionConsumeOrExpel(Server& server, const Keybind& /*bind*/, std::string* /*error*/) {
       if (Workspace* workspace = activeWorkspace(server)) {
-        workspace->expelFocusedRight();
+        if (!workspace->expelFocused(Direction)) {
+          workspace->consumeFocused(Direction);
+        }
       }
       return true;
     }
@@ -725,6 +725,13 @@ namespace umbriel {
     template <int Direction> bool actionCycleWidth(Server& server, const Keybind& /*bind*/, std::string* /*error*/) {
       if (Workspace* workspace = activeWorkspace(server)) {
         workspace->cycleFocusedWidth(Direction);
+      }
+      return true;
+    }
+
+    template <int Direction> bool actionCycleHeight(Server& server, const Keybind& /*bind*/, std::string* /*error*/) {
+      if (Workspace* workspace = activeWorkspace(server)) {
+        workspace->cycleFocusedHeight(Direction);
       }
       return true;
     }
@@ -742,6 +749,24 @@ namespace umbriel {
       if (Workspace* workspace = activeWorkspace(server)) {
         if (const auto* arg = payloadIf<WidthArg>(bind)) {
           workspace->modifyFocusedWidth(arg->fraction);
+        }
+      }
+      return true;
+    }
+
+    bool actionSetHeight(Server& server, const Keybind& bind, std::string* /*error*/) {
+      if (Workspace* workspace = activeWorkspace(server)) {
+        if (const auto* arg = payloadIf<WidthArg>(bind)) {
+          workspace->setFocusedHeight(arg->fraction);
+        }
+      }
+      return true;
+    }
+
+    bool actionModifyHeight(Server& server, const Keybind& bind, std::string* /*error*/) {
+      if (Workspace* workspace = activeWorkspace(server)) {
+        if (const auto* arg = payloadIf<WidthArg>(bind)) {
+          workspace->modifyFocusedHeight(arg->fraction);
         }
       }
       return true;
@@ -800,11 +825,14 @@ namespace umbriel {
       return true;
     }
 
-    bool actionColumnCenter(Server& server, const Keybind& /*bind*/, std::string* /*error*/) {
+    bool actionColumnCenter(Server& server, const Keybind& /*bind*/, std::string* error) {
       if (scratchpadHoldsFocus(server)) {
         return true;
       }
       if (Workspace* workspace = activeWorkspace(server)) {
+        if (workspace->layoutMode() != LayoutMode::Scrolling) {
+          return reject(error, "column-center requires the scrolling layout");
+        }
         workspace->centerFocusedColumn();
       }
       return true;
@@ -859,6 +887,39 @@ namespace umbriel {
       if constexpr (Warp) {
         warpCursorToWindow(server, *view);
       }
+      return true;
+    }
+
+    bool actionWindowFocusLast(Server& server, const Keybind& /*bind*/, std::string* /*error*/) {
+      View* current = focusedWindow(server);
+      for (const auto& entry : server.registry().all()) {
+        View* target = entry.get();
+        if (target == current || !target->mapped() || target->workspace() == nullptr) {
+          continue;
+        }
+        server.focusView(target, FocusReason::ForeignActivation);
+        maybeWarpCursorToWindow(server, target);
+        break;
+      }
+      return true;
+    }
+
+    bool actionWorkspaceFocusLast(Server& server, const Keybind& /*bind*/, std::string* /*error*/) {
+      Workspace* workspace = activeWorkspace(server);
+      if (workspace == nullptr) {
+        return true;
+      }
+      WorkspaceGroup* group = workspace->group();
+      if (group == nullptr) {
+        return true;
+      }
+      Workspace* target = group->previous();
+      if (target == nullptr || target == group->active()) {
+        return true;
+      }
+      group->select(target);
+      Workspace* selected = group->active();
+      maybeWarpCursorToWindow(server, selected != nullptr ? selected->focusedView() : nullptr);
       return true;
     }
 
@@ -1279,8 +1340,10 @@ namespace umbriel {
         &actionMoveVerticalOrWorkspace<1>,
         &actionMoveVerticalOrOutput<-1, WLR_DIRECTION_UP>,
         &actionMoveVerticalOrOutput<1, WLR_DIRECTION_DOWN>,
-        &actionConsumeLeft,
-        &actionExpelRight,
+        &actionConsume<-1>,
+        &actionConsumeOrExpel<-1>,
+        &actionConsume<1>,
+        &actionConsumeOrExpel<1>,
         &actionCycleWidth<1>,
         &actionCycleWidth<-1>,
         &actionSetWidth,
@@ -1350,6 +1413,12 @@ namespace umbriel {
         &actionSwapCycle<-1>,
         &actionMasterCountIncrease,
         &actionMasterCountDecrease,
+        &actionSetHeight,
+        &actionModifyHeight,
+        &actionCycleHeight<1>,
+        &actionCycleHeight<-1>,
+        &actionWindowFocusLast,
+        &actionWorkspaceFocusLast,
     };
 
     consteval bool everyActionHasHandler() {

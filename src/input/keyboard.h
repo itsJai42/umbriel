@@ -3,6 +3,7 @@
 #include "config/config.h"
 
 #include <string>
+#include <string_view>
 #include <wayland-server-core.h>
 #include <xkbcommon/xkbcommon.h>
 
@@ -27,9 +28,15 @@ namespace umbriel {
     // may read or rotate them.
     [[nodiscard]] bool virtualDevice() const { return m_virtual; }
     void applyConfig();
-    // Lock the next XKB group in the keymap, wrapping at the end. False when the
-    // keyboard has nothing to switch to (single-layout keymap, virtual keyboard).
+    // Lock the next XKB group, wrapping at the end. False when this physical
+    // keyboard has fewer than two layouts.
     bool cycleLayout();
+    // Adopt the source keyboard's effective layout when this keymap contains
+    // the same named layout, without selecting this keyboard on the seat.
+    void syncLayoutFrom(const Keyboard& source);
+    // Select a named layout on this physical keyboard without making it the
+    // seat's active input device. False when the keymap lacks that layout.
+    bool setLayoutByName(std::string_view name);
 
   private:
     static void onModifiers(wl_listener* listener, void* data);
@@ -39,8 +46,9 @@ namespace umbriel {
     void handleModifiers();
     void handleKey(void* data);
     void handleDestroy();
-    // Fire the IPC keyboard-layout event when the effective group changed since the last notification. A single
-    // keyboard drives the event stream, so the tracked index is per-keyboard and the first notification always fires.
+    void setLayout(xkb_layout_index_t group);
+    // Report a real effective-group transition. Initial setup, config reloads,
+    // and compositor-driven synchronization update the tracked index directly.
     void notifyLayoutIfChanged();
     // The input-method grab for this keyboard, or null when none applies. Always null while locked, so an IME cannot
     // keylog the lock screen.
@@ -53,6 +61,7 @@ namespace umbriel {
     wlr_keyboard* m_keyboard = nullptr;
     bool m_virtual = false;
     std::string m_deviceName;
+    bool m_syncingLayout = false;
     xkb_layout_index_t m_lastNotifiedLayout = XKB_LAYOUT_INVALID;
 
     wl_listener m_modifiers{};

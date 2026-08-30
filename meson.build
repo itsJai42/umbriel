@@ -206,6 +206,45 @@ xdg_shell_client_c = custom_target(
   command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
 )
 
+xdg_activation_client_h = custom_target(
+  'xdg-activation-v1-client-protocol.h',
+  input: wayland_protocols_dep.get_variable(pkgconfig: 'pkgdatadir') / 'staging/xdg-activation/xdg-activation-v1.xml',
+  output: 'xdg-activation-v1-client-protocol.h',
+  command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
+)
+xdg_activation_client_c = custom_target(
+  'xdg-activation-v1-client-protocol.c',
+  input: wayland_protocols_dep.get_variable(pkgconfig: 'pkgdatadir') / 'staging/xdg-activation/xdg-activation-v1.xml',
+  output: 'xdg-activation-v1-client-protocol.c',
+  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
+)
+
+xdg_toplevel_tag_client_h = custom_target(
+  'xdg-toplevel-tag-v1-client-protocol.h',
+  input: wayland_protocols_dep.get_variable(pkgconfig: 'pkgdatadir') / 'staging/xdg-toplevel-tag/xdg-toplevel-tag-v1.xml',
+  output: 'xdg-toplevel-tag-v1-client-protocol.h',
+  command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
+)
+xdg_toplevel_tag_client_c = custom_target(
+  'xdg-toplevel-tag-v1-client-protocol.c',
+  input: wayland_protocols_dep.get_variable(pkgconfig: 'pkgdatadir') / 'staging/xdg-toplevel-tag/xdg-toplevel-tag-v1.xml',
+  output: 'xdg-toplevel-tag-v1-client-protocol.c',
+  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
+)
+
+content_type_client_h = custom_target(
+  'content-type-v1-client-protocol.h',
+  input: wayland_protocols_dep.get_variable(pkgconfig: 'pkgdatadir') / 'staging/content-type/content-type-v1.xml',
+  output: 'content-type-v1-client-protocol.h',
+  command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
+)
+content_type_client_c = custom_target(
+  'content-type-v1-client-protocol.c',
+  input: wayland_protocols_dep.get_variable(pkgconfig: 'pkgdatadir') / 'staging/content-type/content-type-v1.xml',
+  output: 'content-type-v1-client-protocol.c',
+  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
+)
+
 color_management_client_h = custom_target(
   'color-management-v1-client-protocol.h',
   input: wayland_protocols_dep.get_variable(pkgconfig: 'pkgdatadir') / 'staging/color-management/color-management-v1.xml',
@@ -296,6 +335,18 @@ ext_idle_notify_client_c = custom_target(
   command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
 )
 
+security_context_client_h = custom_target(
+  'security-context-v1-client-protocol.h',
+  input: wayland_protocols_dep.get_variable(pkgconfig: 'pkgdatadir') / 'staging/security-context/security-context-v1.xml',
+  output: 'security-context-v1-client-protocol.h',
+  command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
+)
+security_context_client_c = custom_target(
+  'security-context-v1-protocol.c',
+  input: wayland_protocols_dep.get_variable(pkgconfig: 'pkgdatadir') / 'staging/security-context/security-context-v1.xml',
+  output: 'security-context-v1-protocol.c',
+  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
+)
 
 output_mgmt_client_h = custom_target(
   'wlr-output-management-unstable-v1-client-protocol.h',
@@ -370,12 +421,15 @@ pure_sources = files(
   'src/config/value_parse.cpp',
   'src/config/section.cpp',
   'src/input/modifier_tap.cpp',
+  'src/input/keyboard_layout.cpp',
+  'src/input/surface_layouts.cpp',
   'src/input/shortcut_keysym.cpp',
   'src/layout/layout.cpp',
   'src/layout/scrolling.cpp',
   'src/layout/dwindle.cpp',
   'src/layout/master.cpp',
   'src/output/direction.cpp',
+  'src/output/identity.cpp',
   'src/scene/cheatsheet_rows.cpp',
   'src/overview/shortcut_labels.cpp',
   'src/view/border_ring.cpp',
@@ -508,10 +562,14 @@ unit_tests = [
   ['value-parse', ['tests/unit/value_parse.cpp'], []],
   ['keybind-parse', ['tests/unit/keybind_parse.cpp'], []],
   ['modifier-tap', ['tests/unit/modifier_tap.cpp'], []],
+  ['keyboard-layout', ['tests/unit/keyboard_layout.cpp'], []],
+  ['surface-layouts', ['tests/unit/surface_layouts.cpp'], []],
   ['shortcut-keysym', ['tests/unit/shortcut_keysym.cpp'], []],
   ['output-direction', ['tests/unit/output_direction.cpp'], []],
+  ['output-identity', ['tests/unit/output_identity.cpp'], []],
   ['output-frame-schedule', ['tests/unit/output_frame_schedule.cpp'], []],
   ['hdr-format', ['tests/unit/hdr_format.cpp'], []],
+  ['layout-struts', ['tests/unit/layout_struts.cpp'], []],
   ['scrolling-layout', ['tests/unit/scrolling_layout.cpp'], []],
   ['dwindle-layout', ['tests/unit/dwindle_layout.cpp'], []],
   ['master-layout', ['tests/unit/master_layout.cpp'], []],
@@ -525,6 +583,7 @@ unit_tests = [
   ['config-change', ['tests/unit/config_change.cpp'], []],
   ['config-load', ['tests/unit/config_load.cpp'], [umbriel_core_dep]],
   ['action-registry', ['tests/unit/action_registry.cpp'], [umbriel_core_dep]],
+  ['ipc-commands', ['tests/unit/ipc_commands.cpp'], [umbriel_core_dep]],
   ['config-resolve', ['tests/unit/config_resolve.cpp'], []],
 ]
 
@@ -605,6 +664,12 @@ unmap_client = executable(
     'tests/harness/clients/unmap_client.cpp',
     xdg_shell_client_h,
     xdg_shell_client_c,
+    xdg_activation_client_h,
+    xdg_activation_client_c,
+    xdg_toplevel_tag_client_h,
+    xdg_toplevel_tag_client_c,
+    content_type_client_h,
+    content_type_client_c,
     color_management_client_h,
     color_management_client_c,
     tearing_control_client_h,
@@ -662,6 +727,18 @@ idle_inhibit_client = executable(
   dependencies: [wayland_client_dep],
 )
 
+# Harness wrapper that runs another Wayland client through a committed
+# security-context listener.
+security_context_client = executable(
+  'security-context-client',
+  [
+    'tests/harness/clients/security_context_client.cpp',
+    security_context_client_h,
+    security_context_client_c,
+  ],
+  dependencies: [wayland_client_dep],
+)
+
 alias_target(
   'harness-clients',
   pointer_client,
@@ -676,6 +753,7 @@ alias_target(
   subsurface_client,
   fractional_client,
   idle_inhibit_client,
+  security_context_client,
 )
 
 unit_test_targets = []

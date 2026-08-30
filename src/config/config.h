@@ -44,10 +44,12 @@ namespace umbriel {
   struct WorkspaceLayoutOverrides {
     std::optional<LayoutMode> mode;
     std::optional<int> gap;
+    LayoutStrutOverrides struts;
     std::optional<std::vector<double>> widthPresets;
     struct Scrolling {
       std::optional<double> defaultWidthFraction;
       std::optional<bool> centerUnderfullStrip;
+      std::optional<bool> centerFocused;
       std::optional<ScrollingDirection> direction;
       std::optional<bool> expandSingleColumn;
       bool operator==(const Scrolling&) const = default;
@@ -58,6 +60,7 @@ namespace umbriel {
     } dwindle;
     struct Master {
       std::optional<double> defaultWidthFraction;
+      std::optional<bool> newOnTop;
       std::optional<MasterPosition> position;
       bool operator==(const Master&) const = default;
     } master;
@@ -78,10 +81,12 @@ namespace umbriel {
   struct ResolvedLayoutConfig {
     LayoutMode mode = LayoutMode::Scrolling;
     int gap = 8;
+    LayoutStruts struts;
     std::vector<double> widthPresets{1.0 / 3, 0.5, 2.0 / 3};
     struct Scrolling {
       std::optional<double> defaultWidthFraction;
       bool centerUnderfullStrip = true;
+      bool centerFocused = false;
       // Axis-agnostic layout state is preserved when config reload changes direction.
       ScrollingDirection direction = ScrollingDirection::Horizontal;
       bool expandSingleColumn = false;
@@ -93,6 +98,7 @@ namespace umbriel {
     } dwindle;
     struct Master {
       double defaultWidthFraction = 0.55;
+      bool newOnTop = true;
       MasterPosition position = MasterPosition::Left;
       bool operator==(const Master&) const = default;
     } master;
@@ -117,6 +123,13 @@ namespace umbriel {
     Disabled,
     Always,
     Fullscreen,
+  };
+
+  // Whether a keyboard layout change applies to the whole session or only to the
+  // surface that was focused when it happened.
+  enum class TrackLayout : uint8_t {
+    Global,
+    Window,
   };
   enum class HdrMode {
     Off,
@@ -195,18 +208,45 @@ namespace umbriel {
     bool operator==(const WindowPosition&) const = default;
   };
 
+  enum class ContentType {
+    None,
+    Photo,
+    Video,
+    Game,
+  };
+
+  [[nodiscard]] inline constexpr std::string_view contentTypeName(ContentType type) {
+    switch (type) {
+    case ContentType::None:
+      return "none";
+    case ContentType::Photo:
+      return "photo";
+    case ContentType::Video:
+      return "video";
+    case ContentType::Game:
+      return "game";
+    }
+    return "none";
+  }
+
   struct WindowRule {
     std::string appIdPattern;
     std::string titlePattern;
+    std::string xdgTagPattern;
     std::regex appIdRegex;
     std::regex titleRegex;
+    std::regex xdgTagRegex;
+    std::optional<ContentType> matchContentType;
     std::optional<bool> matchFocused;
     std::optional<std::string> defaultOutput;
     std::optional<bool> defaultFloating;
     std::optional<std::array<int, 2>> defaultSize; // [width, height]
     std::optional<WindowPosition> defaultPosition;
     std::optional<double> defaultWidth;  // column width fraction override
+    std::optional<double> defaultHeight; // floating height fraction of the usable area
     std::optional<int> defaultWorkspace; // 1-64
+    std::optional<std::string> defaultScrollingColumn;
+    std::optional<int> defaultScrollingColumnOrder;
     std::optional<bool> defaultFullscreen;
     std::optional<bool> defaultMaximizeToEdges;
     std::optional<bool> defaultMaximize;
@@ -224,18 +264,23 @@ namespace umbriel {
     std::optional<double> blurIgnoreAlpha;
     std::optional<bool> blurOptimized;
 
-    // The compiled regexes are derived from the patterns and are not comparable,
-    // so equality is decided by the patterns they came from.
+    // The compiled regexes are derived from the app ID, title, and XDG tag patterns and
+    // are not comparable, so equality is decided by the patterns themselves.
     [[nodiscard]] bool operator==(const WindowRule& other) const {
       return appIdPattern == other.appIdPattern
           && titlePattern == other.titlePattern
+          && xdgTagPattern == other.xdgTagPattern
+          && matchContentType == other.matchContentType
           && matchFocused == other.matchFocused
           && defaultOutput == other.defaultOutput
           && defaultFloating == other.defaultFloating
           && defaultSize == other.defaultSize
           && defaultPosition == other.defaultPosition
           && defaultWidth == other.defaultWidth
+          && defaultHeight == other.defaultHeight
           && defaultWorkspace == other.defaultWorkspace
+          && defaultScrollingColumn == other.defaultScrollingColumn
+          && defaultScrollingColumnOrder == other.defaultScrollingColumnOrder
           && defaultFullscreen == other.defaultFullscreen
           && defaultMaximizeToEdges == other.defaultMaximizeToEdges
           && defaultMaximize == other.defaultMaximize
@@ -260,7 +305,10 @@ namespace umbriel {
     std::optional<std::array<int, 2>> defaultSize;
     std::optional<WindowPosition> defaultPosition;
     std::optional<double> defaultWidth;
+    std::optional<double> defaultHeight;
     std::optional<int> defaultWorkspace;
+    std::optional<std::string> defaultScrollingColumn;
+    std::optional<int> defaultScrollingColumnOrder;
     std::optional<bool> defaultFullscreen;
     std::optional<bool> defaultMaximizeToEdges;
     std::optional<bool> defaultMaximize;
@@ -306,7 +354,7 @@ namespace umbriel {
 
   struct Config {
     struct Colors {
-      std::array<float, 4> background{0.0784314F, 0.0784314F, 0.0980392F, 0.9411765F};
+      std::array<float, 4> background{0.0784314F, 0.0784314F, 0.0980392F, 1.0F};
       std::array<float, 4> textPrimary{0.9098039F, 0.9098039F, 0.9176471F, 1.0F};
       std::array<float, 4> textMuted{0.5411765F, 0.5411765F, 0.5725490F, 1.0F};
       std::array<float, 4> accentPrimary{0.4784314F, 0.6392157F, 1.0F, 1.0F};
@@ -471,10 +519,12 @@ namespace umbriel {
     struct Layout {
       LayoutMode mode = LayoutMode::Scrolling;
       int gap = 8;
+      LayoutStruts struts;
       std::vector<double> widthPresets{1.0 / 3, 0.5, 2.0 / 3};
       struct Scrolling {
         std::optional<double> defaultWidthFraction;
         bool centerUnderfullStrip = true;
+        bool centerFocused = false;
         ScrollingDirection direction = ScrollingDirection::Horizontal;
         bool expandSingleColumn = false;
         bool operator==(const Scrolling&) const = default;
@@ -485,6 +535,7 @@ namespace umbriel {
       } dwindle;
       struct Master {
         double defaultWidthFraction = 0.55;
+        bool newOnTop = true;
         MasterPosition position = MasterPosition::Left;
         bool operator==(const Master&) const = default;
       } master;
@@ -525,6 +576,12 @@ namespace umbriel {
       bool operator==(const Environment&) const = default;
     } environment;
 
+    struct Events {
+      std::string lidClose;
+      std::string lidOpen;
+      bool operator==(const Events&) const = default;
+    } events;
+
     struct Input {
       // Advertise and accept the primary-selection clipboard used for
       // middle-click paste.
@@ -540,6 +597,9 @@ namespace umbriel {
         int repeatRate = 25;
         int repeatDelay = 600;
         bool numlockToggle = false;
+        // Global by default: the layout is one session-wide setting, which is the
+        // behaviour every existing config already relies on.
+        TrackLayout trackLayout = TrackLayout::Global;
         bool operator==(const Keyboard&) const = default;
       } keyboard;
 
@@ -550,6 +610,7 @@ namespace umbriel {
         std::optional<double> sensitivity;
         std::optional<double> scrollFactor;
         std::optional<bool> disableWhileTyping;
+        std::optional<bool> disableOnExternalMouse;
         bool operator==(const Touchpad&) const = default;
       } touchpad;
 

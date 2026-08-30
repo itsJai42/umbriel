@@ -6,8 +6,11 @@ extern "C" {
 }
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <optional>
+#include <ranges>
+#include <vector>
 
 namespace umbriel {
 
@@ -71,6 +74,46 @@ namespace umbriel {
     };
   }
 
+  // Pixel length of `fraction` of the usable area on one axis. Rounds like
+  // Layout::fractionalWidth so a float and a tiled lane at the same fraction do
+  // not disagree by a pixel on an odd axis. A degenerate axis yields 0, which
+  // callers pass through unclamped so xdg-shell keeps the client's own
+  // preference for that axis.
+  [[nodiscard]] constexpr int floatingFractionSize(double fraction, int usable) {
+    if (usable <= 0) {
+      return 0;
+    }
+    const int pixels = static_cast<int>(std::lround(fraction * static_cast<double>(usable)));
+    return pixels < 1 ? 1 : (pixels > usable ? usable : pixels);
+  }
+
+  // `size` as a fraction of a usable-axis length. The caller guarantees usable > 0.
+  [[nodiscard]] constexpr double floatingSizeFraction(int size, int usable) {
+    return static_cast<double>(size) / static_cast<double>(usable);
+  }
+
+  // The next preset fraction from `current` in `direction` (negative shrinks),
+  // wrapping to the opposite end. Shared by scrolling columns and floats.
+  [[nodiscard]] inline double nextFractionPreset(const std::vector<double>& presets, double current, int direction) {
+    if (presets.empty()) {
+      return current;
+    }
+    if (direction < 0) {
+      for (const double preset : std::views::reverse(presets)) {
+        if (preset < current - 0.0001) {
+          return preset;
+        }
+      }
+      return presets.back();
+    }
+    for (const double preset : presets) {
+      if (preset > current + 0.0001) {
+        return preset;
+      }
+    }
+    return presets.front();
+  }
+
   // The remembered state of a window's floating identity, kept across tiled round trips so that floating a window twice
   // puts it back where it was. It also owns the configure-serial handoff. A floating client's size is compositor-owned
   // right up until it commits the serial we last requested; after that the client owns it and the compositor must stop
@@ -85,9 +128,21 @@ namespace umbriel {
     void rememberPositionFraction(FloatingPoint origin, const wlr_box& usable);
     [[nodiscard]] std::optional<FloatingPoint> restoredOrigin(const wlr_box& usable) const;
 
-    // Configure-serial handoff
-    void recordSizeRequest(uint32_t serial) { m_sizeRequestSerial = serial; }
-    void clearSizeRequest() { m_sizeRequestSerial.reset(); }
+    // Configure-serial handoff. A fully-specified request is the pending basis
+    // resize actions accumulate against until the client commits its serial.
+    void recordSizeRequest(int width, int height, uint32_t serial) {
+      if (width > 0 && height > 0) {
+        m_pendingSize = {{width, height}};
+      } else {
+        m_pendingSize.reset();
+      }
+      m_sizeRequestSerial = serial;
+    }
+    [[nodiscard]] const std::optional<std::array<int, 2>>& pendingSize() const { return m_pendingSize; }
+    void clearSizeRequest() {
+      m_sizeRequestSerial.reset();
+      m_pendingSize.reset();
+    }
     // True once the client has committed the requested configure (or there was none outstanding). Retires the request
     // and, unless a resize is still in progress, the anchor with it.
     [[nodiscard]] bool retireSizeRequestIfSettled(uint32_t committedSerial);
@@ -104,6 +159,7 @@ namespace umbriel {
     std::optional<std::array<int, 2>> m_size;
     std::optional<std::array<double, 2>> m_posFrac;
     std::optional<uint32_t> m_sizeRequestSerial;
+    std::optional<std::array<int, 2>> m_pendingSize;
     std::optional<wlr_box> m_anchor;
     uint32_t m_edges = 0;
     bool m_resizeActive = false;

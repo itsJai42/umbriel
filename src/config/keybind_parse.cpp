@@ -192,11 +192,16 @@ namespace umbriel {
         {"window-center", "", KeybindAction::WindowCenter},
         {"window-close", "[<window-id>]", KeybindAction::WindowClose, ActionArgKind::OptionalWindowId},
         {"window-consume-left", "", KeybindAction::WindowConsumeLeft},
+        {"window-consume-or-expel-left", "", KeybindAction::WindowConsumeOrExpelLeft},
+        {"window-consume-or-expel-right", "", KeybindAction::WindowConsumeOrExpelRight},
+        {"window-consume-right", "", KeybindAction::WindowConsumeRight},
+        {"window-cycle-height", "", KeybindAction::WindowCycleHeight},
+        {"window-cycle-height-back", "", KeybindAction::WindowCycleHeightBack},
         {"window-cycle-width", "", KeybindAction::WindowCycleWidth},
         {"window-cycle-width-back", "", KeybindAction::WindowCycleWidthBack},
-        {"window-expel-right", "", KeybindAction::WindowExpelRight},
         {"window-focus", "<window-id>", KeybindAction::WindowFocusId, ActionArgKind::WindowId},
         {"window-focus-down", "", KeybindAction::WindowFocusDown},
+        {"window-focus-last", "", KeybindAction::WindowFocusLast},
         {"window-focus-left", "", KeybindAction::WindowFocusLeft},
         {"window-focus-next", "", KeybindAction::WindowFocusNext},
         {"window-focus-or-output-down", "", KeybindAction::WindowFocusOrOutputDown},
@@ -210,6 +215,7 @@ namespace umbriel {
         {"window-focus-switch-floating", "", KeybindAction::WindowFocusSwitchFloating},
         {"window-focus-up", "", KeybindAction::WindowFocusUp},
         {"window-focus-warp", "<window-id>", KeybindAction::WindowFocusWarpId, ActionArgKind::WindowId},
+        {"window-modify-height", "<delta>", KeybindAction::WindowModifyHeight, ActionArgKind::WidthDelta},
         {"window-modify-width", "<delta>", KeybindAction::WindowModifyWidth, ActionArgKind::WidthDelta},
         {"window-move-down", "", KeybindAction::WindowMoveDown},
         {"window-move-or-output-down", "", KeybindAction::WindowMoveOrOutputDown},
@@ -231,6 +237,7 @@ namespace umbriel {
         {"window-move-up", "", KeybindAction::WindowMoveUp},
         {"window-restore-from-scratchpad", "[<output>]", KeybindAction::WindowRestoreFromScratchpad,
          ActionArgKind::OptionalOutput},
+        {"window-set-height", "<fraction>", KeybindAction::WindowSetHeight, ActionArgKind::WidthFraction},
         {"window-set-width", "<fraction>", KeybindAction::WindowSetWidth, ActionArgKind::WidthFraction},
         {"window-swap-next", "", KeybindAction::WindowSwapNext},
         {"window-swap-previous", "", KeybindAction::WindowSwapPrevious},
@@ -241,6 +248,7 @@ namespace umbriel {
         {"window-toggle-pinned", "", KeybindAction::TogglePinned},
         {"window-toggle-scratchpad", "[<output>]", KeybindAction::WindowToggleScratchpad,
          ActionArgKind::OptionalOutput},
+        {"workspace-focus-last", "", KeybindAction::WorkspaceFocusLast},
         {"workspace-move-down", "", KeybindAction::WorkspaceMoveDown},
         {"workspace-move-to-output-down", "", KeybindAction::WorkspaceMoveToOutputDown},
         {"workspace-move-to-output-left", "", KeybindAction::WorkspaceMoveToOutputLeft},
@@ -500,7 +508,7 @@ namespace umbriel {
     add(KeybindAction::WindowMoveDown, XKB_KEY_j, WLR_MODIFIER_SHIFT);
 
     add(KeybindAction::WindowConsumeLeft, XKB_KEY_comma);
-    add(KeybindAction::WindowExpelRight, XKB_KEY_period);
+    add(KeybindAction::WindowConsumeRight, XKB_KEY_period);
     add(KeybindAction::WindowCycleWidth, XKB_KEY_r);
     add(KeybindAction::WindowCycleWidthBack, XKB_KEY_r, WLR_MODIFIER_SHIFT);
     add(KeybindAction::ToggleFullscreen, XKB_KEY_f);

@@ -59,17 +59,18 @@ namespace umbriel {
     }
 
     if (Workspace* workspace = view->workspace()) {
-      if (!view->pinned() && !workspace->active()) {
+      if (WorkspaceGroup* group = workspace->group(); group != nullptr && !view->pinned() && !workspace->active()) {
         const char* appId = view->toplevel()->app_id != nullptr ? view->toplevel()->app_id : "";
-        const char* outputName = workspace->group()->output()->wlr()->name;
-        const std::string_view current = workspace->group()->active() != nullptr
-            ? std::string_view(workspace->group()->active()->name())
-            : std::string_view("<none>");
+        // A group without a live output still has to activate; only the log's output name degrades.
+        const Output* output = group->output();
+        const char* outputName = output != nullptr && output->wlr() != nullptr ? output->wlr()->name : "<none>";
+        const std::string_view current =
+            group->active() != nullptr ? std::string_view(group->active()->name()) : std::string_view("<none>");
         kLog.debug(
             "workspace switch trigger=focus reason={} app_id='{}' output='{}' from='{}' to='{}'",
             focusReasonName(reason), appId, outputName, current, workspace->name()
         );
-        workspace->group()->activate(workspace);
+        group->activate(workspace);
       }
     }
     if (!view->onActiveWorkspace() && !view->pinned()) {
@@ -225,7 +226,7 @@ namespace umbriel {
     if (seat->drag == nullptr && wlr_seat_keyboard_has_grab(seat)) {
       wlr_seat_keyboard_end_grab(seat);
     }
-    wlr_seat_keyboard_notify_clear_focus(seat);
+    m_server.notifyKeyboardClearFocus();
     m_server.refreshOutputPolicies();
   }
 

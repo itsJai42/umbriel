@@ -48,12 +48,16 @@ namespace umbriel {
       for (const auto& entry : ok) {
         const std::string appId = entry.value("app_id", "");
         const std::string title = entry.value("title", "");
+        const std::string xdgTag = entry.value("xdg_tag", "");
+        const std::string xdgTagSuffix = xdgTag.empty() ? "" : " [xdg_tag=" + xdgTag + "]";
+        const std::string contentType = entry.value("content_type", "none");
+        const std::string contentTypeSuffix = contentType == "none" ? "" : " [content_type=" + contentType + "]";
         std::println(
-            "{}{}{}\t{}\t[{} {}x{}{:+}{:+}]",
+            "{}{}{}\t{}\t[{} {}x{}{:+}{:+}]{}{}",
             entry.value("focused", false) ? "*" : (entry.value("urgent", false) ? "!" : " "),
             entry.value("xwayland", false) ? "[Xwayland] " : "", appId.empty() ? "-" : appId,
             title.empty() ? "-" : title, entry.value("floating", false) ? "float" : "tile", entry.value("w", 0),
-            entry.value("h", 0), entry.value("x", 0), entry.value("y", 0)
+            entry.value("h", 0), entry.value("x", 0), entry.value("y", 0), xdgTagSuffix, contentTypeSuffix
         );
       }
     }
@@ -76,6 +80,15 @@ namespace umbriel {
       }
       const std::string name = ok.get<std::string>();
       std::println("{}", name.empty() ? "unnamed" : name);
+    }
+
+    void printKeyboardLayouts(const nlohmann::json& ok) {
+      const size_t currentIndex = ok.value("current_index", size_t{0});
+      const auto& names = ok.at("names");
+      for (size_t index = 0; index < names.size(); ++index) {
+        const std::string name = names.at(index).get<std::string>();
+        std::println("{} {}", index == currentIndex ? "*" : " ", name.empty() ? "-" : name);
+      }
     }
 
     void printLayers(const nlohmann::json& ok) {
@@ -333,6 +346,8 @@ namespace umbriel {
       entry["active"] = v->activated();
       entry["app_id"] = v->toplevel()->app_id != nullptr ? v->toplevel()->app_id : "";
       entry["title"] = v->toplevel()->title != nullptr ? v->toplevel()->title : "";
+      entry["xdg_tag"] = v->xdgTag();
+      entry["content_type"] = contentTypeName(v->contentType());
       entry["floating"] = v->floating();
       // The compositor's own notion of focus, which is what every action acts
       // on. Lets a caller (and the harness) see where focus went.
@@ -396,6 +411,9 @@ namespace umbriel {
     nlohmann::json layers = nlohmann::json::array();
     for (const auto& l : server.layerSurfaces()) {
       auto* s = l->layerSurface();
+      if (s == nullptr) {
+        continue;
+      }
       nlohmann::json entry;
       entry["layer"] = layerName(s->current.layer);
       entry["namespace"] = s->namespace_ != nullptr ? s->namespace_ : "";
@@ -590,7 +608,7 @@ namespace umbriel {
       {"layers", "", "list layer-shell surfaces", false, &IpcCommands::layers, &printLayers},
       {"color", "", "show color-management state", false, &IpcCommands::color, &printColor},
       {"tearing", "", "show tearing-control state", false, &IpcCommands::tearing, &printTearing},
-      {"keyboard-layouts", "", "list keyboard layouts", false, &IpcCommands::keyboardLayouts, nullptr},
+      {"keyboard-layouts", "", "list keyboard layouts", false, &IpcCommands::keyboardLayouts, &printKeyboardLayouts},
       {"output-create", "<name>", "create a headless output (headless sessions only)", true, &IpcCommands::outputCreate,
        &printOutputName},
       {"output-destroy", "<name>", "destroy an output (headless sessions only)", true, &IpcCommands::outputDestroy,

@@ -47,6 +47,7 @@ To understand the values and philosophy guiding the project, read our [ethos](ht
 - An animated overview, directional focus, configurable keybinds, submaps, and activation policy
 - Blur, shadows, rounded corners, double borders, opacity, and animated position, size, and fade transitions
 - Keyboard, pointer, touch, touchpad gestures, XKB configuration, and text-input-v3/input-method-v2 input method support
+- [Restricted Wayland connections](docs/user/security.md) for sandbox engines through security-context-v1
 - Layer shell, session locking, clipboard management, screen capture, output control, and gamma control
 - X11 application support through xwayland-satellite
 - Live-reloaded TOML configuration with diagnostics and includes, plus local IPC and runtime inspection commands
@@ -163,7 +164,7 @@ Inside the session:
 | mod+F1 | Cycle window focus |
 | mod+H/J/K/L or arrows | Focus adjacent window |
 | mod+Shift+H/J/K/L or arrows | Move focused window |
-| mod+comma / mod+period | Consume left / expel right |
+| mod+comma / mod+period | Consume left / consume right |
 | mod+R / mod+F | Cycle width / toggle fullscreen |
 | mod+T | Toggle floating for the focused window |
 | mod+P | Toggle pin for the focused window |
@@ -184,20 +185,7 @@ Umbriel first checks `$XDG_CONFIG_HOME/umbriel/config.toml`, then `$XDG_CONFIG_D
 `[include] files = ["theme.toml", "keybinds.toml"]`; later files and the main file override earlier values.
 
 See [`examples/config.toml`](examples/config.toml) for the packaged starting configuration and
-[`docs/user/`](docs/user/) for the full reference:
-
-- [Configuration](docs/user/configuration.md): loading, includes, and global settings
-- [Appearance](docs/user/appearance.md): colors, borders, blur, and shadows
-- [Workspace Overview](docs/user/workspace-overview.md): workspace overview and hot corners
-- [Layout](docs/user/layout.md): scrolling, dwindle, and master layout behavior
-- [Input](docs/user/input.md): keyboard, pointer, tablet, cursor, and focus settings
-- [Keybinds](docs/user/keybinds.md): binding syntax, submaps, and binding behavior
-- [Actions](docs/user/actions.md): the complete keybind action reference
-- [Scratchpads](docs/user/scratchpad.md): setup, workflow, and multi-output behavior
-- [Window and Layer Rules](docs/user/rules.md): matching, effects, and blur
-- [Outputs](docs/user/outputs.md): monitor configuration and output movement
-- [Workspaces](docs/user/workspaces.md): workspace models and workspace rules
-- [Maintainer design notes](docs/design/README.md): reloads, workspaces, and overview rendering
+[`our online documentation`](https://docs.noctalia.dev/umbriel/) for the full reference.
 
 ### Nix (home-manager / NixOS)
 

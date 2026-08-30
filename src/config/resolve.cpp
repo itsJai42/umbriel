@@ -12,6 +12,28 @@ namespace umbriel {
 
   namespace {
 
+    const OutputRule* matchingOutputRule(const Config& config, const OutputIdentity& identity) {
+      const OutputRule* connectorRule = nullptr;
+      for (const OutputRule& rule : config.outputs) {
+        switch (outputNameMatch(identity, rule.name)) {
+        case OutputNameMatch::Descriptor:
+          return &rule;
+        case OutputNameMatch::Connector:
+          connectorRule = &rule;
+          break;
+        case OutputNameMatch::None:
+          break;
+        }
+      }
+      return connectorRule;
+    }
+
+    std::optional<std::vector<std::string>>
+    workspaceNamesForIdentity(const Config& config, const OutputIdentity& identity) {
+      const OutputRule* rule = matchingOutputRule(config, identity);
+      return rule != nullptr && rule->workspaces ? rule->workspaces : std::nullopt;
+    }
+
     std::optional<std::vector<std::string>> workspaceNamesForOutput(const Config& config, std::string_view outputName) {
       const auto rule = std::ranges::find_if(config.outputs, [&](const OutputRule& candidate) {
         return candidate.name == outputName;
@@ -54,11 +76,26 @@ namespace umbriel {
       if (overrides.gap) {
         resolved.gap = *overrides.gap;
       }
+      if (overrides.struts.left) {
+        resolved.struts.left = *overrides.struts.left;
+      }
+      if (overrides.struts.right) {
+        resolved.struts.right = *overrides.struts.right;
+      }
+      if (overrides.struts.top) {
+        resolved.struts.top = *overrides.struts.top;
+      }
+      if (overrides.struts.bottom) {
+        resolved.struts.bottom = *overrides.struts.bottom;
+      }
       if (overrides.scrolling.defaultWidthFraction) {
         resolved.scrolling.defaultWidthFraction = overrides.scrolling.defaultWidthFraction;
       }
       if (overrides.scrolling.centerUnderfullStrip) {
         resolved.scrolling.centerUnderfullStrip = *overrides.scrolling.centerUnderfullStrip;
+      }
+      if (overrides.scrolling.centerFocused) {
+        resolved.scrolling.centerFocused = *overrides.scrolling.centerFocused;
       }
       if (overrides.dwindle.preserveSplit) {
         resolved.dwindle.preserveSplit = *overrides.dwindle.preserveSplit;
@@ -71,6 +108,9 @@ namespace umbriel {
       }
       if (overrides.master.defaultWidthFraction) {
         resolved.master.defaultWidthFraction = *overrides.master.defaultWidthFraction;
+      }
+      if (overrides.master.newOnTop) {
+        resolved.master.newOnTop = *overrides.master.newOnTop;
       }
       if (overrides.master.position) {
         resolved.master.position = *overrides.master.position;
@@ -98,6 +138,9 @@ namespace umbriel {
     }
     return owner;
   }
+  const OutputRule* findOutputRule(const Config& config, const OutputIdentity& identity) {
+    return matchingOutputRule(config, identity);
+  }
 
   bool workspaceRuleTargetExists(const Config& config, const WorkspaceConfig& rule) {
     if (!rule.output.empty()) {
@@ -117,7 +160,10 @@ namespace umbriel {
     return false;
   }
 
-  ResolvedWindowRule resolveWindowRules(const Config& config, const char* appId, const char* title, bool focused) {
+  ResolvedWindowRule resolveWindowRules(
+      const Config& config, const char* appId, const char* title, std::string_view xdgTag, ContentType contentType,
+      bool focused
+  ) {
     ResolvedWindowRule resolved;
     const std::string_view appIdView = appId != nullptr ? appId : "";
     const std::string_view titleView = title != nullptr ? title : "";
@@ -132,6 +178,14 @@ namespace umbriel {
         if (titleView.empty() || !std::regex_search(titleView.begin(), titleView.end(), rule.titleRegex)) {
           continue;
         }
+      }
+      if (!rule.xdgTagPattern.empty()) {
+        if (xdgTag.empty() || !std::regex_search(xdgTag.begin(), xdgTag.end(), rule.xdgTagRegex)) {
+          continue;
+        }
+      }
+      if (rule.matchContentType && *rule.matchContentType != contentType) {
+        continue;
       }
       if (rule.matchFocused && *rule.matchFocused != focused) {
         continue;
@@ -152,8 +206,17 @@ namespace umbriel {
       if (rule.defaultWidth) {
         resolved.defaultWidth = rule.defaultWidth;
       }
+      if (rule.defaultHeight) {
+        resolved.defaultHeight = rule.defaultHeight;
+      }
       if (rule.defaultWorkspace) {
         resolved.defaultWorkspace = rule.defaultWorkspace;
+      }
+      if (rule.defaultScrollingColumn) {
+        resolved.defaultScrollingColumn = rule.defaultScrollingColumn;
+      }
+      if (rule.defaultScrollingColumnOrder) {
+        resolved.defaultScrollingColumnOrder = rule.defaultScrollingColumnOrder;
       }
       if (rule.defaultFullscreen) {
         resolved.defaultFullscreen = rule.defaultFullscreen;
@@ -235,13 +298,16 @@ namespace umbriel {
     ResolvedLayoutConfig resolved;
     resolved.mode = config.layout.mode;
     resolved.gap = config.layout.gap;
+    resolved.struts = config.layout.struts;
     resolved.widthPresets = config.layout.widthPresets;
     resolved.scrolling.defaultWidthFraction = config.layout.scrolling.defaultWidthFraction;
     resolved.scrolling.centerUnderfullStrip = config.layout.scrolling.centerUnderfullStrip;
+    resolved.scrolling.centerFocused = config.layout.scrolling.centerFocused;
     resolved.scrolling.direction = config.layout.scrolling.direction;
     resolved.scrolling.expandSingleColumn = config.layout.scrolling.expandSingleColumn;
     resolved.dwindle.preserveSplit = config.layout.dwindle.preserveSplit;
     resolved.master.defaultWidthFraction = config.layout.master.defaultWidthFraction;
+    resolved.master.newOnTop = config.layout.master.newOnTop;
     resolved.master.position = config.layout.master.position;
     const int borderWidth = config.appearance.totalBorderWidth();
     resolved.totalGap = resolved.gap + 2 * borderWidth;
@@ -250,28 +316,26 @@ namespace umbriel {
   }
 
   ResolvedLayoutConfig
-  resolveWorkspaceLayout(const Config& config, const char* outputName, std::string_view name, size_t index) {
-    const std::string_view outName = outputName != nullptr ? outputName : "";
+  resolveWorkspaceLayout(const Config& config, const OutputIdentity& identity, std::string_view name, size_t index) {
     ResolvedLayoutConfig resolved = resolveGlobalLayout(config);
-    const auto applyMatchingRules = [&](std::string_view output) {
+    const auto applyMatchingRules = [&](bool outputScoped) {
       for (const auto& rule : config.workspaceRules) {
-        if (rule.output == output
+        const bool outputMatches = outputScoped
+            ? !rule.output.empty() && outputNameMatch(identity, rule.output) != OutputNameMatch::None
+            : rule.output.empty();
+        if (outputMatches
             && ((rule.index && static_cast<size_t>(*rule.index - 1) == index) || (!rule.index && rule.name == name))) {
           applyWorkspaceLayoutOverrides(config, resolved, rule.layout);
         }
       }
     };
-
-    applyMatchingRules("");
-    if (!outName.empty()) {
-      applyMatchingRules(outName);
-    }
+    applyMatchingRules(false);
+    applyMatchingRules(true);
     return resolved;
   }
 
-  ResolvedWorkspaceSet resolveWorkspacesForOutput(const Config& config, const char* outputName) {
-    const std::string_view outName = outputName != nullptr ? outputName : "";
-    const auto names = workspaceNamesForOutput(config, outName);
+  ResolvedWorkspaceSet resolveWorkspacesForOutput(const Config& config, const OutputIdentity& identity) {
+    const auto names = workspaceNamesForIdentity(config, identity);
     ResolvedWorkspaceSet result;
     if (!names) {
       result.dynamic = true;
@@ -279,7 +343,7 @@ namespace umbriel {
       result.workspaces.reserve(count);
       for (size_t index = 0; index < count; ++index) {
         const std::string name = std::to_string(index + 1);
-        result.workspaces.push_back({name, resolveWorkspaceLayout(config, outputName, name, index)});
+        result.workspaces.push_back({name, resolveWorkspaceLayout(config, identity, name, index)});
       }
       return result;
     }
@@ -287,7 +351,7 @@ namespace umbriel {
     result.workspaces.reserve(names->size());
     for (size_t index = 0; index < names->size(); ++index) {
       const auto& name = (*names)[index];
-      result.workspaces.push_back({name, resolveWorkspaceLayout(config, outputName, name, index)});
+      result.workspaces.push_back({name, resolveWorkspaceLayout(config, identity, name, index)});
     }
     return result;
   }

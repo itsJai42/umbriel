@@ -46,22 +46,24 @@ namespace umbriel {
     public:
       MasterResizeGrab(
           Layout* layout, double* masterFraction, double fraction0, double horizontalSpan, double horizontalSign,
-          double* upperWeight, double* lowerWeight, double weightSum, double upperHeight, double lowerHeight
+          MasterStackLayout::Area* area, int upperRow, double weightSum, double upperHeight, double lowerHeight
       )
           : m_layout(layout), m_masterFraction(masterFraction), m_fraction0(fraction0),
-            m_horizontalSpan(horizontalSpan), m_horizontalSign(horizontalSign), m_upperWeight(upperWeight),
-            m_lowerWeight(lowerWeight), m_weightSum(weightSum), m_upperHeight(upperHeight), m_lowerHeight(lowerHeight) {
-      }
+            m_horizontalSpan(horizontalSpan), m_horizontalSign(horizontalSign), m_area(area), m_upperRow(upperRow),
+            m_weightSum(weightSum), m_upperHeight(upperHeight), m_lowerHeight(lowerHeight) {}
 
       void applyDelta(double dx, double dy, const wlr_box& /*usable*/) override {
         if (m_masterFraction != nullptr && m_horizontalSpan > 0.0) {
           *m_masterFraction = std::clamp(m_fraction0 + m_horizontalSign * dx / m_horizontalSpan, 0.1, 0.9);
         }
         const double pairHeight = m_upperHeight + m_lowerHeight;
-        if (m_upperWeight != nullptr && m_lowerWeight != nullptr && pairHeight > 0.0) {
+        if (m_area != nullptr
+            && m_upperRow >= 0
+            && static_cast<size_t>(m_upperRow + 1) < m_area->weights.size()
+            && pairHeight > 0.0) {
           const double ratio = std::clamp((m_upperHeight + dy) / pairHeight, 0.05, 0.95);
-          *m_upperWeight = m_weightSum * ratio;
-          *m_lowerWeight = m_weightSum * (1.0 - ratio);
+          m_area->weights[static_cast<size_t>(m_upperRow)] = m_weightSum * ratio;
+          m_area->weights[static_cast<size_t>(m_upperRow + 1)] = m_weightSum * (1.0 - ratio);
         }
       }
 
@@ -73,8 +75,8 @@ namespace umbriel {
       double m_fraction0;
       double m_horizontalSpan;
       double m_horizontalSign;
-      double* m_upperWeight;
-      double* m_lowerWeight;
+      MasterStackLayout::Area* m_area;
+      int m_upperRow;
       double m_weightSum;
       double m_upperHeight;
       double m_lowerHeight;
@@ -245,8 +247,9 @@ namespace umbriel {
       m_master.views.push_back(view);
       m_master.weights.push_back(1.0);
     } else {
-      m_stack.views.insert(m_stack.views.begin(), view);
-      m_stack.weights.insert(m_stack.weights.begin(), 1.0);
+      const bool newOnTop = m_config == nullptr || m_config->master.newOnTop;
+      m_stack.views.insert(newOnTop ? m_stack.views.begin() : m_stack.views.end(), view);
+      m_stack.weights.insert(newOnTop ? m_stack.weights.begin() : m_stack.weights.end(), 1.0);
     }
     rebuildColumns();
   }
@@ -274,9 +277,14 @@ namespace umbriel {
     rebuildColumns();
   }
 
-  bool MasterStackLayout::consumeLeft(View* view) {
-    Area* source = masterIsLeft() ? &m_stack : &m_master;
-    Area* destination = masterIsLeft() ? &m_master : &m_stack;
+  bool MasterStackLayout::consume(View* view, int direction) {
+    if (direction != -1 && direction != 1) {
+      return false;
+    }
+    Area* left = masterIsLeft() ? &m_master : &m_stack;
+    Area* right = masterIsLeft() ? &m_stack : &m_master;
+    Area* source = direction < 0 ? right : left;
+    Area* destination = direction < 0 ? left : right;
     const int row = rowInArea(*source, view);
     if (row < 0) {
       return false;
@@ -290,21 +298,7 @@ namespace umbriel {
     return true;
   }
 
-  bool MasterStackLayout::expelRight(View* view) {
-    Area* source = masterIsLeft() ? &m_master : &m_stack;
-    Area* destination = masterIsLeft() ? &m_stack : &m_master;
-    const int row = rowInArea(*source, view);
-    if (row < 0) {
-      return false;
-    }
-    const double weight = source->weights[static_cast<size_t>(row)];
-    source->views.erase(source->views.begin() + row);
-    source->weights.erase(source->weights.begin() + row);
-    destination->views.push_back(view);
-    destination->weights.push_back(weight);
-    rebuildColumns();
-    return true;
-  }
+  bool MasterStackLayout::expel(View* view, int direction) { return consume(view, direction); }
 
   bool MasterStackLayout::moveViewVertical(View* view, int direction) {
     View* neighbor = directionalNeighbor(m_targets, view, false, direction);
@@ -589,6 +583,31 @@ namespace umbriel {
     return area == &m_master ? masterFrac() : 1.0 - masterFrac();
   }
 
+  double MasterStackLayout::heightFraction(const View* view) const {
+    const Area* area = areaOf(view);
+    if (area == nullptr || area->views.size() <= 1) {
+      return 1.0;
+    }
+    const int row = rowInArea(*area, view);
+    const double total = std::accumulate(area->weights.begin(), area->weights.end(), 0.0);
+    return area->weights[static_cast<size_t>(row)] / total;
+  }
+
+  bool MasterStackLayout::setHeightFraction(View* view, double fraction) {
+    Area* area = areaOf(view);
+    if (area == nullptr || area->views.size() <= 1) {
+      return false;
+    }
+    const int row = rowInArea(*area, view);
+    const auto index = static_cast<size_t>(row);
+    const double total = std::accumulate(area->weights.begin(), area->weights.end(), 0.0);
+    const double others = total - area->weights[index];
+    const double target = std::clamp(fraction, 0.1, 0.95);
+    area->weights[index] = target * others / (1.0 - target);
+    rebuildColumns();
+    return true;
+  }
+
   uint32_t MasterStackLayout::resizableEdges(const View* view) const {
     const Area* area = areaOf(view);
     if (area == nullptr) {
@@ -637,8 +656,6 @@ namespace umbriel {
       horizontalSign = masterIsLeft() ? 1.0 : -1.0;
     }
 
-    double* upperWeight = nullptr;
-    double* lowerWeight = nullptr;
     double weightSum = 0.0;
     double upperHeight = 0.0;
     double lowerHeight = 0.0;
@@ -650,20 +667,18 @@ namespace umbriel {
       upperRow = row;
     }
     if (upperRow >= 0) {
-      upperWeight = &area->weights[static_cast<size_t>(upperRow)];
-      lowerWeight = &area->weights[static_cast<size_t>(upperRow + 1)];
-      weightSum = *upperWeight + *lowerWeight;
+      weightSum = area->weights[static_cast<size_t>(upperRow)] + area->weights[static_cast<size_t>(upperRow + 1)];
       upperHeight = targetBox(area->views[static_cast<size_t>(upperRow)]).height;
       lowerHeight = targetBox(area->views[static_cast<size_t>(upperRow + 1)]).height;
     }
 
-    if (horizontalFraction == nullptr && upperWeight == nullptr) {
+    if (horizontalFraction == nullptr && upperRow < 0) {
       return nullptr;
     }
     m_savedFrac = 0.0;
     return std::make_unique<MasterResizeGrab>(
-        this, horizontalFraction, masterFrac(), horizontalSpan, horizontalSign, upperWeight, lowerWeight, weightSum,
-        upperHeight, lowerHeight
+        this, horizontalFraction, masterFrac(), horizontalSpan, horizontalSign, area, upperRow, weightSum, upperHeight,
+        lowerHeight
     );
   }
 

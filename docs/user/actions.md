@@ -1,7 +1,7 @@
 # Actions
 
-This page lists every action that can be assigned to a keybind or invoked
-through `umbriel msg`. See [Keybinds](keybinds.md) for binding syntax.
+Assign actions to keybinds or invoke them through `umbriel msg`; this reference
+lists every available action. See [Keybinds](keybinds.md) for binding syntax.
 
 ## Parameterized actions
 
@@ -11,15 +11,23 @@ through `umbriel msg`. See [Keybinds](keybinds.md) for binding syntax.
 | `submap:<name>` | Enter a named submap; `submap:reset` exits one level | `"submap:resize"` |
 | `workspace-switch:<ws>` | Workspace name, optionally `/<output>` | `"workspace-switch:3"`, `"workspace-switch:CHAT/HDMI-A-1"` |
 | `window-move-to-workspace:<ws>` | Same as above | `"window-move-to-workspace:2"` |
-| `column-move-to-workspace:<ws>` | Same as above; moves the focused window's whole column, except in master layout where it moves only the focused window | `"column-move-to-workspace:CHAT/HDMI-A-1"` |
-| `window-set-width:<frac>` | Fraction 0.1-1.0 | `"window-set-width:0.667"` |
-| `window-modify-width:<delta>` | Signed fraction -0.9..0.9; the resulting width clamps to 0.1..1.0 | `"window-modify-width:-0.2"` |
+| `column-move-to-workspace:<ws>` | Same as above; moves the focused window's whole column | `"column-move-to-workspace:CHAT/HDMI-A-1"` |
+| `window-set-width:<frac>` | Fraction 0.1-1.0; on a floating window, a fraction of the usable area | `"window-set-width:0.667"` |
+| `window-modify-width:<delta>` | Signed fraction -0.9..0.9; the resulting width clamps to 0.1..1.0. On a floating window, the delta applies to its current usable-area fraction | `"window-modify-width:-0.2"` |
+| `window-set-height:<frac>` | Fraction 0.1-1.0; on a floating window, a fraction of the usable area | `"window-set-height:0.7"` |
+| `window-modify-height:<delta>` | Signed fraction -0.9..0.9; the resulting height clamps to 0.1..1.0. On a floating window, the delta applies to its current usable-area fraction | `"window-modify-height:-0.2"` |
 | `workspace-set-layout:<scrolling\|dwindle\|master\|toggle>` | Switch the active workspace's layout at runtime; `toggle` cycles scrolling to dwindle to master to scrolling. The override remains until a config reload reasserts the configured mode. | `"workspace-set-layout:toggle"` |
 | `window-focus:<window-id>` | Window id from `umbriel windows` | `"window-focus:0123abcd"` |
 | `window-focus-warp:<window-id>` | Focus the window and warp the cursor to its visible center | `"window-focus-warp:0123abcd"` |
 | `window-close[:<window-id>]` | Optional window id; bare form closes the focused window | `"window-close"` |
-| `dpms-off[:<output>]` / `dpms-on[:<output>]` | Optional connector name; bare form targets every configured output | `"dpms-off:DP-1"`, `"dpms-on"` |
+| `dpms-off[:<output>]` / `dpms-on[:<output>]` | Optional connector or monitor name; bare form targets every configured output | `"dpms-off:DP-1"`, `"dpms-on"` |
 | `session-quit[:skip-confirmation]` | Bare form opens an on-screen confirmation (Enter or the quit bind confirms; any other key or click cancels); `skip-confirmation` quits immediately | `"session-quit:skip-confirmation"` |
+
+`spawn:` exports a one-shot `XDG_ACTIVATION_TOKEN` and matching
+`DESKTOP_STARTUP_ID` to the command. Single-instance applications can pass
+that token to their existing window so Umbriel reveals it, including when the
+window remaps after hiding in a tray. Startup commands from `general.autostart`
+do not receive a launch token.
 
 A second `session-quit` while the confirmation is open also quits. While the
 session is locked, `session-quit` quits without the dialog.
@@ -38,6 +46,14 @@ monitor's center so subsequent actions continue there.
 ## Window and layout actions
 
 Unless shown with a `:<parameter>` suffix below, these take no argument.
+
+Column-scoped actions operate on the active layout's column projection.
+Scrolling owns real multi-window columns. In dwindle, every tiled leaf is a
+single-window column, so column actions act on that window. In master, the
+master and stack areas are the two columns. When an action has no meaning in
+the active layout, its keybind does nothing and the IPC `msg` command returns
+an error naming the required layout. Currently, only `column-center` has this
+restriction.
 
 ### Focus
 
@@ -59,12 +75,18 @@ Unless shown with a `:<parameter>` suffix below, these take no argument.
 - **Next or previous window:** `window-focus-next`, `window-focus-previous`.
   Cycle through tiled windows in layout order, then floating windows, with
   wrapping in both directions.
+- **Previously focused window:** `window-focus-last`. Focus the previous entry in
+  the global focus history, including windows on another workspace or output.
+  Repeated use toggles between the two most recently focused windows.
+- **Previously focused workspace:** `workspace-focus-last`. Focus the previously
+  active workspace on the focused output. Repeated use toggles between the two
+  most recently active workspaces on that output.
 
 With `input.cursor.follows_focus` enabled, these navigation actions warp the
 cursor to the visible center of the selected window. This also applies to
-`window-focus-switch-floating`. Pointer-driven and automatic focus changes do
-not move the cursor. `window-focus:<id>` remains focus-only, while
-`window-focus-warp:<id>` always moves it.
+`window-focus-switch-floating` and `window-focus-last`. Pointer-driven and
+automatic focus changes do not move the cursor. `window-focus:<id>` remains
+focus-only, while `window-focus-warp:<id>` always moves it.
 
 ### Moving windows and columns
 
@@ -75,15 +97,18 @@ not move the cursor. `window-focus:<id>` remains focus-only, while
   `window-move-to-workspace-previous` move the focused window.
   `column-move-to-workspace-next` and `column-move-to-workspace-previous` move
   its whole column. All four follow the moved focus and do not wrap around.
-  In master layout, the column-scoped forms move only the focused window.
 - **A column within a row:** `column-move-left`, `column-move-right`. Move the
-  focused window's column left or right.
+  focused window's column left or right. In dwindle, they swap the focused
+  window with the neighboring tile in that direction. In master, they exchange
+  the master and stack contents and do nothing while either area is empty.
 - **A column across an output edge:** `window-move-or-output-left`,
   `window-move-or-output-right`. Move the focused column left or right, or to
   the output in that direction when already at the edge.
 - **First or last column position:** `column-move-to-first`,
   `column-move-to-last`. Move the focused window's column to the first or last
-  position in the workspace.
+  position in the workspace. In dwindle, they swap the focused window with the
+  first or last tile. In master, they perform the same master/stack exchange
+  when the focused area is not already first or last.
 - **Next or previous layout position:** `window-swap-next`,
   `window-swap-previous`. Exchange the focused tiled window with its next or
   previous layout-order neighbor, wrapping at both ends. Focus stays on the
@@ -99,25 +124,50 @@ not move the cursor. `window-focus:<id>` remains focus-only, while
 - **Across an output edge:** `window-move-or-output-up`,
   `window-move-or-output-down`. Move within the column, or move the column to
   the output in that direction when already at the edge.
-- **Merge or split columns:** `window-consume-left` pulls the focused window
-  into the column to its left. `window-expel-right` places it in a new column to
-  the right.
+- **Merge or split columns:** `window-consume-left` and
+  `window-consume-right` pull the focused window into the adjacent column in
+  that direction. `window-consume-or-expel-left` and
+  `window-consume-or-expel-right` split a window that shares its column into a
+  new column in the requested direction, or consume a window that is alone.
+  In master layout these actions move between the master and stack areas in
+  the requested direction. In dwindle layout they swap with the adjacent
+  on-screen neighbor in the requested horizontal direction. Vertically adjacent
+  tree-order neighbors are not considered.
 
 ### Size, state, and viewport
 
 - **Column width:** `window-modify-width:<delta>` changes the focused area's
   width by a signed fraction. `window-cycle-width` and
   `window-cycle-width-back` cycle through preset widths in either direction.
+- **Height:** `window-set-height:<frac>` sets the focused window's fraction of
+  its column's stacking extent, `window-modify-height:<delta>` changes that
+  fraction by a signed amount, and `window-cycle-height` /
+  `window-cycle-height-back` cycle it through the same presets in either
+  direction. In scrolling and master layouts this sizes a row within its
+  column or area. In dwindle it adjusts the vertical splits containing the
+  window. On a vertical scrolling workspace the stacking axis is horizontal,
+  so these actions change a window's width within its lane.
+- **Floating windows:** all of the width and height actions above resize a
+  focused floating window directly, as fractions of the output's usable area
+  clamped to the client's min/max size hints. Cycling walks
+  `layout.width_presets` on either axis. Resizing a maximized float leaves
+  maximization behind and keeps the new size, so a later toggle maximizes
+  rather than reverting to the pre-maximize box. Fullscreen owns the size
+  outright, so the actions do nothing while a float is fullscreen.
 - **Fullscreen:** `window-toggle-fullscreen`. Toggle fullscreen for the focused
-  window.
-- **Column width state:** `window-toggle-maximize`. Toggle the focused column's
-  full-width state.
+  window. Fullscreen ignores layout struts and layer-shell exclusive zones and
+  fills the entire output.
+- **Maximize:** `window-toggle-maximize`. Toggle the focused column's full-width
+  state. Tiled columns remain inside configured struts and gaps. A floating
+  window has no column, so it fills the output's usable area and restores the
+  box it had before.
 - **Window to usable-area edges:** `window-toggle-maximize-to-edges`. Toggle
-  maximization without gaps or borders. Layer-shell exclusive zones remain
-  visible. A column's full-width restore state is preserved when this is toggled
-  or when fullscreen is entered and left.
+  maximization without layout struts, gaps, or borders. Layer-shell exclusive
+  zones remain visible. A column's full-width restore state is preserved when
+  this is toggled or when fullscreen is entered and left.
 - **Center a column:** `column-center`. Center the focused column in the
-  scrolling viewport. It is a no-op on non-scrolling workspaces.
+  scrolling viewport. It requires the scrolling layout; elsewhere its keybind
+  does nothing and the IPC `msg` command reports an error.
 - **Scroll the viewport:** `layout-scroll-left`, `layout-scroll-right`. Scroll
   the active workspace's scrolling-layout viewport. `layout-scroll-up` and
   `layout-scroll-down` are first-class synonyms for left and right.
@@ -148,7 +198,9 @@ Vertical-heavy configurations should bind wheel chords to
 
 `window-toggle-floating` remembers the window's floating size and position.
 The first time a window floats, Umbriel places it slightly below and to the
-right of its tiled position while keeping it on-screen.
+right of its tiled position while keeping it on-screen. Floating windows can
+also be resized from the keyboard with the width and height actions under
+**Size, state, and viewport** above.
 
 `window-focus-switch-floating` switches focus to the most recently focused
 window with the opposite floating state.
@@ -183,8 +235,8 @@ scrolling-layout state, including the column width, its full-width restore
 value, and stacked row proportions. Destination-moving column actions act like
 their matching window action when a floating window is focused because it has
 no tiled column.
-In master layout, column-scoped workspace moves transfer only the focused
-window because the master and stack areas are not movable columns.
+In master layout, column-scoped workspace moves transfer every member of the
+focused master or stack area.
 
 `window-center` centers the focused floating window on its output's usable
 area. It is a no-op while a tiled window is focused.
@@ -195,7 +247,7 @@ The directional output actions target the adjacent monitor:
 |--------|--------------|
 | `output-focus-left` / `output-focus-right` / `output-focus-up` / `output-focus-down` | Move focus to the adjacent monitor in that direction. |
 | `window-move-to-output-left` / `window-move-to-output-right` / `window-move-to-output-up` / `window-move-to-output-down` | Move the focused window to the adjacent monitor's active workspace. |
-| `column-move-to-output-left` / `column-move-to-output-right` / `column-move-to-output-up` / `column-move-to-output-down` | Move the focused window's whole column to the adjacent monitor's active workspace. In master layout, move only the focused window. |
+| `column-move-to-output-left` / `column-move-to-output-right` / `column-move-to-output-up` / `column-move-to-output-down` | Move the focused window's whole column to the adjacent monitor's active workspace. |
 | `workspace-move-to-output-left` / `workspace-move-to-output-right` / `workspace-move-to-output-up` / `workspace-move-to-output-down` | Move every window of the active workspace to the adjacent monitor, preserving column order and widths. |
 
 Directions do not wrap around: with no monitor in that direction the action
@@ -204,6 +256,9 @@ to the center of the target monitor, so focus follows the action. Floating
 windows keep their relative position on the new monitor; a column moved onto a
 dwindle workspace flattens into single-window columns, whether it is moved by a
 workspace or output action, the same as drag-and-drop.
+Output direction is determined from output centers in logical layout
+coordinates. Small overlaps caused by fractional scaling and coordinate rounding
+do not prevent vertically or horizontally arranged outputs from being found.
 
 ## Overview actions
 
@@ -216,6 +271,38 @@ shifts the following workspace numbers down.
 Umbriel keeps one empty dynamic workspace, so other previews disappear as soon
 as their last window is moved or closed, including while the overview is open.
 Static configured workspace lists only accept drops onto existing previews.
+
+## Hot corners
+
+Hot corners run an action when the pointer rests in a configured output corner.
+They are independent of the workspace overview and can invoke any action
+accepted by a keybind.
+
+```toml
+[hot_corners.top_left]
+enabled = true
+delay_ms = 500
+action = "overview-open"
+
+[hot_corners.bottom_right]
+enabled = true
+delay_ms = 750
+action = "spawn:notify-send 'Bottom right'"
+```
+
+Each corner has its own enabled state, delay, and action. Omitted corners do
+nothing, and `enabled = false` disables a corner without removing its action. A
+delay of `0` activates immediately. Hot corners are inactive on an output while
+a window is fullscreen there.
+
+Available subsections are `hot_corners.top_left`, `hot_corners.top_right`,
+`hot_corners.bottom_left`, and `hot_corners.bottom_right`.
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `enabled` | bool | `false` | Enable this corner. |
+| `delay_ms` | int | `500` | Time at this corner before its action runs (0-10000). |
+| `action` | string | unset | Keybind-style action to run. |
 
 ## Cheatsheet actions
 
@@ -231,9 +318,11 @@ passed to the window beneath it.
 
 ## Keyboard layout action
 
-`keyboard-layout-next` activates the next layout in `input.keyboard.layout` and
-wraps at the end, on every physical keyboard. It is inert when only one layout
-is configured, and virtual keyboards keep the keymap their client supplied.
+`keyboard-layout-next` advances one physical keyboard to its next configured
+layout and synchronizes that named layout to physical keyboards that also
+provide it. The action wraps at the source keyboard's final layout, is inert
+when no physical keyboard provides multiple layouts, and never changes a
+virtual keyboard's client-owned keymap.
 
 ```toml
 [input.keyboard]

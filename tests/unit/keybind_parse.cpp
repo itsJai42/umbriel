@@ -306,6 +306,27 @@ UMBRIEL_TEST(rejectsInvalidWidthDeltas) {
   CHECK(!parseAction("window-modify-width:nan", bind));
 }
 
+UMBRIEL_TEST(parsesHeightActions) {
+  Keybind bind;
+  CHECK(parseAction("window-set-height:0.5", bind));
+  CHECK(bind.action == KeybindAction::WindowSetHeight);
+  const auto* height = umbriel::payloadIf<umbriel::WidthArg>(bind);
+  CHECK(height != nullptr);
+  CHECK(height != nullptr && std::fabs(height->fraction - 0.5) < 1e-9);
+
+  CHECK(parseAction("window-modify-height:-0.2", bind));
+  CHECK(bind.action == KeybindAction::WindowModifyHeight);
+  height = umbriel::payloadIf<umbriel::WidthArg>(bind);
+  CHECK(height != nullptr && std::fabs(height->fraction + 0.2) < 1e-9);
+
+  CHECK(parseAction("window-modify-height:+0.1", bind));
+  height = umbriel::payloadIf<umbriel::WidthArg>(bind);
+  CHECK(height != nullptr && std::fabs(height->fraction - 0.1) < 1e-9);
+
+  CHECK(!parseAction("window-set-height:0.05", bind));
+  CHECK(!parseAction("window-modify-height:0", bind));
+}
+
 UMBRIEL_TEST(parsesLayoutModeActions) {
   Keybind bind;
   CHECK(parseAction("workspace-set-layout:scrolling", bind));
@@ -387,6 +408,19 @@ UMBRIEL_TEST(parsesArgumentFreeNewActions) {
   CHECK(parseAction("master-count-decrease", bind));
   CHECK(bind.action == KeybindAction::MasterCountDecrease);
 
+  CHECK(parseAction("window-focus-last", bind));
+  CHECK(bind.action == KeybindAction::WindowFocusLast);
+  CHECK(parseAction("window-consume-left", bind));
+  CHECK(bind.action == KeybindAction::WindowConsumeLeft);
+  CHECK(parseAction("window-consume-or-expel-left", bind));
+  CHECK(bind.action == KeybindAction::WindowConsumeOrExpelLeft);
+  CHECK(parseAction("window-consume-right", bind));
+  CHECK(bind.action == KeybindAction::WindowConsumeRight);
+  CHECK(parseAction("window-consume-or-expel-right", bind));
+  CHECK(bind.action == KeybindAction::WindowConsumeOrExpelRight);
+  CHECK(!parseAction("window-consume-or-expel", bind));
+  CHECK(!parseAction("window-expel-right", bind));
+
   // Argument-free actions reject arguments.
   CHECK(!parseAction("workspace-next:1", bind));
   CHECK(!parseAction("window-move-to-workspace-next:1", bind));
@@ -396,6 +430,11 @@ UMBRIEL_TEST(parsesArgumentFreeNewActions) {
   CHECK(!parseAction("output-focus-left:DP-1", bind));
   CHECK(!parseAction("window-center:x", bind));
   CHECK(!parseAction("window-toggle-maximize-to-edges:x", bind));
+  CHECK(!parseAction("window-focus-last:x", bind));
+  CHECK(!parseAction("window-consume-left:x", bind));
+  CHECK(!parseAction("window-consume-or-expel-left:x", bind));
+  CHECK(!parseAction("window-consume-right:x", bind));
+  CHECK(!parseAction("window-consume-or-expel-right:x", bind));
 }
 
 UMBRIEL_TEST(parsesWorkspaceSelectors) {
@@ -614,6 +653,26 @@ UMBRIEL_TEST(actionSpecNamesAreUniqueAndSorted) {
   for (size_t i = 1; i < specs.size(); ++i) {
     CHECK(specs[i - 1].name != specs[i].name);
   }
+}
+
+UMBRIEL_TEST(everyActionHasASpec) {
+  // actions.cpp guards the handler table with a consteval everyActionHasHandler.
+  // Nothing guarded the name table, so an action could ship with a handler, a
+  // cheatsheet row, and docs while staying unbindable and unreachable over IPC.
+  std::array<bool, static_cast<size_t>(KeybindAction::Count)> named{};
+  for (const auto& spec : umbriel::actionSpecs()) {
+    named[static_cast<size_t>(spec.action)] = true;
+  }
+  // Enumerator 0 is None, which is never bindable. On failure the reported
+  // "got" value is the index of the first action that has no name.
+  size_t firstUnnamed = named.size();
+  for (size_t action = 1; action < named.size(); ++action) {
+    if (!named[action]) {
+      firstUnnamed = action;
+      break;
+    }
+  }
+  CHECK_EQ(firstUnnamed, named.size());
 }
 
 UMBRIEL_TEST(parameterizedSpecsDeclareAParam) {

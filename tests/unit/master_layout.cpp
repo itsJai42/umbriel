@@ -30,6 +30,7 @@ namespace {
     config.edgePad = 10;
     config.master.position = umbriel::MasterPosition::Left;
     config.master.defaultWidthFraction = 0.55;
+    config.master.newOnTop = true;
     return config;
   }
 
@@ -91,6 +92,15 @@ UMBRIEL_TEST(newViewsJoinTheTopOfTheStack) {
   CHECK_EQ(fixture.layout.rowOf(stub(2)), 0);
 }
 
+UMBRIEL_TEST(newViewsJoinTheBottomOfTheStackWhenConfigured) {
+  Fixture fixture;
+  fixture.config.master.newOnTop = false;
+  fixture.addViews(3);
+  fixture.layout.arrange(kUsable);
+  CHECK(fixture.layout.targetBox(stub(2)).y > fixture.layout.targetBox(stub(1)).y);
+  CHECK_EQ(fixture.layout.rowOf(stub(2)), 1);
+}
+
 UMBRIEL_TEST(stackRowsSplitTheHeightWithGaps) {
   Fixture fixture;
   fixture.addViews(3);
@@ -102,6 +112,24 @@ UMBRIEL_TEST(stackRowsSplitTheHeightWithGaps) {
   CHECK_EQ(bottom.y, 366);
   CHECK_EQ(bottom.height, 344);
   CHECK_EQ(bottom.y - (top.y + top.height), 12);
+}
+
+UMBRIEL_TEST(setHeightFractionUpdatesAreaAndColumnWeights) {
+  Fixture fixture;
+  fixture.addViews(3);
+  CHECK(fixture.layout.setHeightFraction(stub(2), 0.7));
+  CHECK(std::fabs(fixture.layout.heightFraction(stub(2)) - 0.7) < 1e-9);
+
+  const auto& weights = fixture.layout.columns()[1].heightWeights;
+  CHECK_EQ(weights.size(), size_t{2});
+  CHECK(std::fabs(weights[0] / (weights[0] + weights[1]) - 0.7) < 1e-9);
+}
+
+UMBRIEL_TEST(setHeightFractionRejectsAViewAloneInItsArea) {
+  Fixture fixture;
+  fixture.addViews(3);
+  CHECK(!fixture.layout.setHeightFraction(stub(0), 0.7));
+  CHECK(std::fabs(fixture.layout.heightFraction(stub(0)) - 1.0) < 1e-9);
 }
 
 UMBRIEL_TEST(insertIsIdempotentPerView) {
@@ -146,7 +174,7 @@ UMBRIEL_TEST(removingTheLastMasterViewPromotesTheStackTop) {
 UMBRIEL_TEST(expellingEveryMasterViewLeavesAFullWidthStack) {
   Fixture fixture;
   fixture.addViews(1);
-  CHECK(fixture.layout.expelRight(stub(0)));
+  CHECK(fixture.layout.expel(stub(0), 1));
   fixture.layout.arrange(kUsable);
   CHECK_EQ(fixture.layout.columns().size(), size_t{1});
   CHECK_EQ(fixture.layout.targetBox(stub(0)).width, 1260);
@@ -155,16 +183,25 @@ UMBRIEL_TEST(expellingEveryMasterViewLeavesAFullWidthStack) {
 UMBRIEL_TEST(consumeLeftPullsAWindowIntoTheMaster) {
   Fixture fixture;
   fixture.addViews(2);
-  CHECK(fixture.layout.consumeLeft(stub(1)));
+  CHECK(fixture.layout.consume(stub(1), -1));
   CHECK_EQ(fixture.layout.columns().size(), size_t{1});
   CHECK_EQ(fixture.layout.rowOf(stub(0)), 0);
   CHECK_EQ(fixture.layout.rowOf(stub(1)), 1);
 }
 
+UMBRIEL_TEST(consumeRightMovesAMasterWindowIntoTheStack) {
+  Fixture fixture;
+  fixture.addViews(2);
+  CHECK(fixture.layout.consume(stub(0), 1));
+  CHECK_EQ(fixture.layout.columns().size(), size_t{1});
+  CHECK_EQ(fixture.layout.rowOf(stub(1)), 0);
+  CHECK_EQ(fixture.layout.rowOf(stub(0)), 1);
+}
+
 UMBRIEL_TEST(aWindowOpenedWithAnEmptyMasterBecomesMaster) {
   Fixture fixture;
   fixture.addViews(2);
-  CHECK(fixture.layout.expelRight(stub(0)));
+  CHECK(fixture.layout.expel(stub(0), 1));
   fixture.layout.insertView(stub(2), 0);
   CHECK_EQ(fixture.layout.columnOf(stub(2)), 0);
   CHECK_EQ(fixture.layout.rowOf(stub(2)), 0);
@@ -181,6 +218,16 @@ UMBRIEL_TEST(positionRightMirrorsTheAreas) {
   CHECK_EQ(stack.width, 562);
   CHECK_EQ(master.x, 584);
   CHECK_EQ(master.width, 686);
+}
+
+UMBRIEL_TEST(consumeUsesVisualDirectionWhenMasterIsRight) {
+  Fixture fixture;
+  fixture.config.master.position = umbriel::MasterPosition::Right;
+  fixture.addViews(2);
+  CHECK(fixture.layout.consume(stub(0), -1));
+  CHECK_EQ(fixture.layout.columns().size(), size_t{1});
+  CHECK_EQ(fixture.layout.rowOf(stub(1)), 0);
+  CHECK_EQ(fixture.layout.rowOf(stub(0)), 1);
 }
 
 UMBRIEL_TEST(widthFractionIsComplementaryAcrossColumns) {
@@ -318,7 +365,7 @@ UMBRIEL_TEST(aVerticalGrabTransfersHeightBetweenRows) {
 UMBRIEL_TEST(snapshotRestoresAreasRowsAndWidthState) {
   Fixture source;
   source.addViews(4);
-  CHECK(source.layout.consumeLeft(stub(2)));
+  CHECK(source.layout.consume(stub(2), -1));
   source.layout.arrange(kUsable);
   CHECK(source.layout.moveViewVertical(stub(2), -1));
   source.layout.arrange(kUsable);
@@ -372,7 +419,7 @@ UMBRIEL_TEST(snapshotPromotesTheStackWhenTheMasterIsMissing) {
 UMBRIEL_TEST(snapshotUsesMemberIdsInsteadOfCapturedViewPointers) {
   Fixture source;
   source.addViews(3);
-  CHECK(source.layout.consumeLeft(stub(2)));
+  CHECK(source.layout.consume(stub(2), -1));
   const auto capture = source.layout.captureState();
   auto remapped = capture.members;
   for (auto& member : remapped) {

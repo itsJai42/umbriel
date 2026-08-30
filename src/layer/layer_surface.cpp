@@ -234,11 +234,7 @@ namespace umbriel {
     wlr_seat_keyboard_end_grab(seat);
 
     // Give the layer seat keyboard focus so clients (e.g. Noctalia) receive Escape.
-    if (wlr_keyboard* keyboard = wlr_seat_get_keyboard(seat)) {
-      wlr_seat_keyboard_notify_enter(seat, surface, keyboard->keycodes, keyboard->num_keycodes, &keyboard->modifiers);
-    } else {
-      wlr_seat_keyboard_notify_enter(seat, surface, nullptr, 0, nullptr);
-    }
+    m_server->notifyKeyboardEnter(surface);
     m_server->refreshOutputPolicies();
   }
 
@@ -421,6 +417,12 @@ namespace umbriel {
     m_destroy.link.next = nullptr;
     m_newPopup.link.next = nullptr;
 
+    // m_scene is already freed: wlr_scene_layer_surface_v1_create registers its own destroy listener on
+    // m_layerSurface->events.destroy before ours, and that handler destroys the tree and frees the helper.
+    m_scene = nullptr;
+    if (m_layerSurface != nullptr) {
+      m_layerSurface->data = nullptr;
+    }
     // removeLayerSurface deletes this. Arrange after erase, never via this->m_server.
     server->removeLayerSurface(this, wlrOutput);
   }

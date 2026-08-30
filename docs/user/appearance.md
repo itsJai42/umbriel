@@ -1,12 +1,12 @@
 # Appearance
 
-This page covers colors, window appearance, blur, and shadows.
+Configure colors, window appearance, blur, shadows, and other visual effects.
 
 ## Colors
 
 ```toml
 [colors]
-background = "#141419F0"
+background = "#141419FF"
 text_primary = "#E8E8EAFF"
 text_muted = "#8A8A92FF"
 accent_primary = "#7AA3FFFF"
@@ -21,16 +21,20 @@ cheatsheet and configuration diagnostic banner. Colors are `#RRGGBB` or
 
 | Key                | Type  | Default     | Description                                        |
 | ------------------ | ----- | ----------- | -------------------------------------------------- |
-| `background`       | color | `#141419F0` | Shared background for internal panels and banners. |
+| `background`       | color | `#141419FF` | Shared background for internal panels and banners. |
 | `text_primary`     | color | `#E8E8EAFF` | Primary text.                                      |
 | `text_muted`       | color | `#8A8A92FF` | Secondary help and status text.                    |
-| `accent_primary`   | color | `#7AA3FFFF` | Primary emphasis, including titles and key chords. |
+| `accent_primary`   | color | `#7AA3FFFF` | Primary emphasis, including titles, key chords, and the cheatsheet border. |
 | `accent_secondary` | color | `#F5C96BFF` | Secondary emphasis, including group headings.      |
 | `warning`          | color | `#F5C96BFF` | Warning status text.                               |
-| `error`            | color | `#FF6B6BFF` | Error status text.                                 |
+| `error`            | color | `#FF6B6BFF` | Error text and the session-quit confirmation border.             |
 
 Key chord backgrounds are derived from `background` and `text_primary`; they
 remain opaque so text stays legible over translucent panels.
+
+Modal panels use their semantic colors as borders: one logical pixel of
+`accent_primary` around the keybind cheatsheet, and two logical pixels of
+`error` around the smaller session-quit confirmation.
 
 ## Window appearance
 
@@ -91,7 +95,7 @@ saturation = 1.1  # 0.0-2.0
 ```
 
 `enabled` is the master switch. Individual surfaces must still opt in through
-[window rules](rules.md) or [layer rules](rules.md#layer-rules).
+[window rules](window-rules.md) or [layer rules](layer-rules.md).
 Blur only renders where a surface is transparent. Sampling remains confined to
 the surface's owning output when a window overflows into a neighbouring output.
 Disabling the master switch also releases SceneFX's per-output blur render

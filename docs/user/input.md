@@ -1,6 +1,7 @@
 # Input
 
-This page covers compositor-wide input settings and per-device behavior.
+Configure keyboard, pointer, touchpad, tablet, cursor, and focus behavior in one
+place.
 
 ## Settings
 
@@ -31,6 +32,7 @@ options = ""      # XKB options, comma-separated
 repeat_rate = 25  # 0-1000 Hz, 0 disables
 repeat_delay = 600 # 0-10000 ms
 numlock_toggle = true # true enables NumLock when a keyboard connects; false leaves it off
+track_layout = "global" # "global", or "window" to track the layout per surface
 ```
 
 `layout` takes a comma-separated list to load several layouts at once
@@ -45,11 +47,50 @@ layout = "us,de"
 options = "grp:alt_shift_toggle"
 ```
 
+Physical keyboards that share a named layout stay on that layout together,
+whether the change comes from an XKB toggle or `keyboard-layout-next`. Device
+overrides may list layouts in a different order: Umbriel matches them by XKB
+name, and leaves a keyboard unchanged when it does not provide the selected
+layout. IPC reports the layout vocabulary of the keyboard that most recently
+changed groups. Connecting another keyboard adopts that selected layout when
+available and does not reset the existing keyboards.
+
+Run `umbriel keyboard-layouts` to list the layouts reported by that keyboard.
+The active layout is prefixed with `*`. Use `umbriel keyboard-layouts --json`
+for the same names and a zero-based `current_index` in structured output.
+
 `options` is passed to XKB verbatim, so anything `xkbcli list` reports under
 options works (`grp:win_space_toggle`, `caps:escape`, `compose:ralt`, …). An
 `options` value XKB does not recognize is ignored silently, the same as with
 `setxkbmap`; a `layout` or `variant` that fails to compile is reported in the
 log and the whole keyboard block falls back to the system default.
+
+#### Tracking the layout per window
+
+With several layouts loaded, `track_layout` decides how far a layout change
+reaches.
+
+| Value | Behavior |
+|-------|----------|
+| `"global"` | A layout change applies to the whole session. This is the default. |
+| `"window"` | Each surface keeps its own layout. |
+
+Under `"window"`, the named layout in use when a surface loses focus is stored
+against that surface and restored when it regains focus. Matching by XKB name
+keeps device overrides with differently ordered layout lists consistent. A
+surface that has not been focused before starts from the canonical keyboard's
+first layout, so it does not inherit the layout of the previous surface.
+
+The unit here is the surface, not the window, so layer-shell clients are covered
+too. Opening a launcher while a window using the second layout is focused gives
+the new launcher the first layout. Closing it returns focus, and its remembered
+layout, to the window. Reloading input configuration rebuilds the physical
+keymaps and clears remembered surface layouts.
+
+This matters most when the layouts share nothing. Two Latin layouts differ by a
+few keys, but a Latin and a non-Latin layout share no characters at all, so
+writing in one application and typing commands in another means switching on
+every single change of focus unless the compositor remembers.
 
 ### Touchpad
 
@@ -61,6 +102,7 @@ natural_scroll = true
 # sensitivity = 0.5           # -1.0 to 1.0
 # scroll_factor = 1.5         # touchpad scroll speed, 0.1 to 10.0
 # disable_while_typing = true
+# disable_on_external_mouse = true
 ```
 
 Tap-to-click is enabled by default. Set `tap = false` to disable it globally,
@@ -70,6 +112,12 @@ corresponding libinput default. Set `disable_while_typing = false` to keep the
 touchpad active while typing. Removing either optional setting on reload
 restores the device default. Options are applied only when supported by the
 device; an explicitly configured unsupported option is reported in the log.
+
+The effective `natural_scroll` value also controls Umbriel's three-finger
+gestures: horizontal strip scrolling, vertical workspace switching, and
+workspace selection while the overview is open. A per-device override or
+preserved libinput default applies to gestures from that device. The
+four-finger overview open and close gesture keeps its fixed direction.
 
 `accel_profile` and `sensitivity` work like their `[input.mouse]` counterparts,
 including custom curves. Both remain unset by default, which uses each
@@ -83,6 +131,15 @@ remains unset by default (identity, `1.0`) and takes the next scroll event on
 reload. It applies only to the continuous scroll delta: discrete notches,
 overview wheel stepping, and three-finger-swipe strip travel keep their own
 counting semantics.
+
+Set `disable_on_external_mouse = true` to disable the touchpad while an
+external mouse is connected. Libinput re-enables it automatically once the
+mouse is unplugged. Detection is handled by libinput itself, so this only
+works in a native session because a nested session has no libinput devices to
+configure. Unlike `tap` and `disable_while_typing`, this option has no
+`[[input.device]]` per-device override. If a device doesn't support the mode,
+an explicitly configured value is ignored and a warning is logged; removing
+the key on reload restores the device's default.
 
 ### Mouse
 
@@ -161,7 +218,7 @@ compositor-wide because they are not properties of one physical input device.
 ```toml
 [input.tablet]
 enabled = true                 # false disables the tablet and its pads
-map_to_output = "DP-1"         # confine the tablet area to one monitor
+map_to_output = "DP-1"         # connector or monitor Config name
 map_to_focused_output = false
 map_to_focused_window = false  # pen area = focused window
 left_handed = false

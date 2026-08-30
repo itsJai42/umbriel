@@ -29,6 +29,7 @@
 #include "xwayland/supervisor.h"
 
 #include <algorithm>
+#include <array>
 #include <csignal>
 #include <cstdlib>
 #include <ranges>
@@ -43,14 +44,57 @@ namespace umbriel {
 
     constexpr Logger kLog("server");
     constexpr size_t kWaylandClientBufferSize = 1024 * 1024;
+    // Security-context clients only receive reviewed, ordinary application
+    // protocols. New globals stay unavailable until they are classified here.
+    constexpr std::array<std::string_view, 28> kAllowedSecurityContextGlobals{
+        "wl_shm",
+        "wl_drm",
+        "zwp_linux_dmabuf_v1",
+        "wp_linux_drm_syncobj_manager_v1",
+        "wl_compositor",
+        "wl_subcompositor",
+        "wl_data_device_manager",
+        "zwp_primary_selection_device_manager_v1",
+        "wp_viewporter",
+        "wp_fractional_scale_manager_v1",
+        "wp_presentation",
+        "wp_tearing_control_manager_v1",
+        "wp_content_type_manager_v1",
+        "wl_output",
+        "wp_color_manager_v1",
+        "xdg_wm_base",
+        "xdg_toplevel_tag_manager_v1",
+        "zxdg_decoration_manager_v1",
+        "org_kde_kwin_server_decoration_manager",
+        "zwp_relative_pointer_manager_v1",
+        "zwp_pointer_constraints_v1",
+        "zwp_pointer_gestures_v1",
+        "zwp_tablet_manager_v2",
+        "zwp_idle_inhibit_manager_v1",
+        "xdg_activation_v1",
+        "wl_seat",
+        "wp_cursor_shape_manager_v1",
+        "zwp_text_input_manager_v3",
+    };
+
+    bool isAllowedSecurityContextGlobal(std::string_view interface) {
+      return std::ranges::find(kAllowedSecurityContextGlobals, interface) != kAllowedSecurityContextGlobals.end();
+    }
 
     bool filterGlobal(const wl_client* client, const wl_global* global, void* data) {
       auto* server = static_cast<Server*>(data);
       const wl_interface* interface = wl_global_get_interface(global);
-      if (interface != nullptr && std::string_view(interface->name) == "zwp_primary_selection_device_manager_v1") {
+      if (interface == nullptr) {
+        return true;
+      }
+      const std::string_view interfaceName(interface->name);
+      if (server->clientHasSecurityContext(client) && !isAllowedSecurityContextGlobal(interfaceName)) {
+        return false;
+      }
+      if (interfaceName == "zwp_primary_selection_device_manager_v1") {
         return config().input.middleClickPaste;
       }
-      if (interface != nullptr && std::string_view(interface->name) == "wp_color_manager_v1") {
+      if (interfaceName == "wp_color_manager_v1") {
         const bool wine = WineColorManager::clientNeedsCompatibility(client);
         if (server->wineColorManager() != nullptr && global == server->wineColorManager()->global()) {
           return wine;
@@ -107,6 +151,29 @@ namespace umbriel {
     }
 
   } // namespace
+
+  bool Server::clientHasSecurityContext(const wl_client* client) const {
+    return m_securityContextManager != nullptr
+        && wlr_security_context_manager_v1_lookup_client(m_securityContextManager, client) != nullptr;
+  }
+
+  ContentType Server::surfaceContentType(wlr_surface* surface) const {
+    if (m_contentTypeManager == nullptr || surface == nullptr) {
+      return ContentType::None;
+    }
+    switch (wlr_surface_get_content_type_v1(m_contentTypeManager, surface)) {
+    case WP_CONTENT_TYPE_V1_TYPE_PHOTO:
+      return ContentType::Photo;
+    case WP_CONTENT_TYPE_V1_TYPE_VIDEO:
+      return ContentType::Video;
+    case WP_CONTENT_TYPE_V1_TYPE_GAME:
+      return ContentType::Game;
+    case WP_CONTENT_TYPE_V1_TYPE_NONE:
+    default:
+      return ContentType::None;
+    }
+  }
+
   bool Server::isXwaylandSurface(const wlr_surface* surface) const {
     if (m_xwayland == nullptr || surface == nullptr || surface->resource == nullptr) {
       return false;
@@ -176,6 +243,10 @@ namespace umbriel {
     if (wlr_primary_selection_v1_device_manager_create(m_display) == nullptr) {
       throw std::runtime_error("failed to create primary-selection manager");
     }
+    m_securityContextManager = wlr_security_context_manager_v1_create(m_display);
+    if (m_securityContextManager == nullptr) {
+      throw std::runtime_error("failed to create security-context manager");
+    }
     wl_display_set_global_filter(m_display, filterGlobal, this);
     wlr_viewporter_create(m_display);
     wlr_fractional_scale_manager_v1_create(m_display, 1);
@@ -183,6 +254,10 @@ namespace umbriel {
     m_tearingControlManager = wlr_tearing_control_manager_v1_create(m_display, 1);
     if (m_tearingControlManager == nullptr) {
       throw std::runtime_error("failed to create tearing-control manager");
+    }
+    m_contentTypeManager = wlr_content_type_manager_v1_create(m_display, 1);
+    if (m_contentTypeManager == nullptr) {
+      throw std::runtime_error("failed to create content-type manager");
     }
     wlr_ext_data_control_manager_v1_create(m_display, 1);
 
@@ -284,6 +359,13 @@ namespace umbriel {
     m_newXdgPopup.notify = onNewXdgPopup;
     wl_signal_add(&m_xdgShell->events.new_popup, &m_newXdgPopup);
 
+    m_xdgToplevelTagManager = wlr_xdg_toplevel_tag_manager_v1_create(m_display, 1);
+    if (m_xdgToplevelTagManager == nullptr) {
+      throw std::runtime_error("failed to create XDG toplevel tag manager");
+    }
+    m_setXdgToplevelTag.notify = onSetXdgToplevelTag;
+    wl_signal_add(&m_xdgToplevelTagManager->events.set_tag, &m_setXdgToplevelTag);
+
     m_xdgDecorationManager = wlr_xdg_decoration_manager_v1_create(m_display);
     m_newXdgDecoration.notify = onNewXdgDecoration;
     wl_signal_add(&m_xdgDecorationManager->events.new_toplevel_decoration, &m_newXdgDecoration);
@@ -375,6 +457,7 @@ namespace umbriel {
     wl_list_remove(&m_newOutput.link);
     wl_list_remove(&m_newInput.link);
     wl_list_remove(&m_newXdgToplevel.link);
+    wl_list_remove(&m_setXdgToplevelTag.link);
     wl_list_remove(&m_newXdgPopup.link);
     wl_list_remove(&m_newXdgDecoration.link);
     wl_list_remove(&m_newLayerSurface.link);
@@ -673,14 +756,30 @@ namespace umbriel {
     return m_shellLayerTrees[layer];
   }
 
-  void Server::spawn(const char* command, const char* description) {
+  void Server::spawn(const char* command, const char* description, bool withActivationToken) {
     if (m_socketName.empty()) {
       wlr_log(WLR_ERROR, "cannot spawn before the Wayland socket exists");
       return;
     }
 
+    wlr_xdg_activation_token_v1* launchToken = nullptr;
+    std::string launchTokenName;
+    if (withActivationToken && m_xdgActivation != nullptr) {
+      launchToken = wlr_xdg_activation_token_v1_create(m_xdgActivation);
+      if (launchToken != nullptr) {
+        trackActivationToken(launchToken, true);
+        const char* name = wlr_xdg_activation_token_v1_get_name(launchToken);
+        if (name != nullptr) {
+          launchTokenName = name;
+        }
+      }
+    }
+
     pid_t pid = fork();
     if (pid < 0) {
+      if (launchToken != nullptr) {
+        wlr_xdg_activation_token_v1_destroy(launchToken);
+      }
       wlr_log(WLR_ERROR, "fork failed");
       return;
     }
@@ -694,6 +793,13 @@ namespace umbriel {
       } else {
         // Avoid X11/XWayland fallback into the parent session.
         unsetenv("DISPLAY");
+      }
+      if (!launchTokenName.empty()) {
+        setenv("XDG_ACTIVATION_TOKEN", launchTokenName.c_str(), 1);
+        setenv("DESKTOP_STARTUP_ID", launchTokenName.c_str(), 1);
+      } else {
+        unsetenv("XDG_ACTIVATION_TOKEN");
+        unsetenv("DESKTOP_STARTUP_ID");
       }
       execl("/bin/sh", "/bin/sh", "-c", command, nullptr);
       _exit(1);

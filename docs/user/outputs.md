@@ -1,8 +1,41 @@
 # Outputs
 
-Output sections configure individual monitors. Names must exactly match
-connector names such as `DP-1` or `HDMI-A-1`. Nested outputs use `WL-1`;
+Output sections configure individual monitors. A section is named either by
+connector or by monitor.
+
+A **connector** is `DP-1`, `HDMI-A-1` and so on. Nested outputs use `WL-1`;
 headless outputs use `HEADLESS-1`.
+
+A **monitor** name is `"<make> <model> <serial>"`, shown by `umbriel outputs`
+as `Config name`, with the literal `Unknown` for any field the display leaves
+empty:
+
+```toml
+[output."Microstep MSI G2712F CD6T084401192"]
+mode = "1920x1080@180"
+```
+
+Both forms are matched case-insensitively, and both work anywhere an output is
+named: output sections, `default_output` on a window rule, `map_to_output` on a
+tablet, `output` on a workspace rule, and the `:OUTPUT` suffix on actions such
+as `dpms-off` and `scratchpad-toggle`.
+
+Prefer the monitor form when a rule belongs to a particular display rather than
+to a particular port. A connector is a property of the machine, so a laptop used
+at two desks sees both monitors as `HDMI-A-1`, and a connector-keyed rule
+written for one silently applies to the other, typically as a mode the second
+display cannot do. Naming the monitor lets both rules coexist, each applying
+only when that display is attached.
+
+When connector and monitor output sections both match, the monitor section
+wins. This allows a connector section to provide a port-specific fallback while
+a monitor section overrides it for a known display.
+
+A display that reports no make, model or serial can only be named by its
+connector. It is not matched as `Unknown Unknown Unknown`, since every such
+output would answer to that. Two displays that report the same make, model, and
+serial also share a monitor name; use their distinct connectors when both are
+connected.
 
 When an output is disconnected or disabled through configuration, Umbriel moves
 its windows to the active workspace on another enabled output, and moves them
@@ -16,7 +49,8 @@ continue to associate windows on inactive workspaces with the restored output
 without requiring each workspace to be visited. If no enabled output remains,
 windows stay without a workspace until one becomes available.
 
-Run `umbriel outputs` inside a session to list connector names and modes.
+Run `umbriel outputs` inside a session to list connector names, copyable monitor
+configuration names, and modes.
 
 ```toml
 [output.DP-1]
@@ -99,7 +133,7 @@ With `"fullscreen"`, switching away from the fullscreen workspace, leaving
 fullscreen, or closing the window disables VRR again.
 
 A focused window can override this output policy with the window-rule `vrr`
-key. See [window rules](rules.md#settings-updated-while-a-window-is-open).
+key. See [window rules](window-rules.md#settings-updated-while-a-window-is-open).
 
 ```toml
 [output.DP-1]
@@ -140,8 +174,8 @@ tearing` to inspect the client hint, resolved rule, eligibility, last submitted
 page-flip mode, presentation result, and any fallback reason. Use `umbriel
 tearing --json` for machine-readable diagnostics.
 
-See [window rules](rules.md#settings-updated-while-a-window-is-open) for per-window
-overrides.
+See [window rules](window-rules.md#settings-updated-while-a-window-is-open)
+for per-window overrides.
 
 ### HDR
 
@@ -244,8 +278,8 @@ settings. Only the config file can disable an output; see below.
 
 Use `dpms-off` and `dpms-on` to power configured monitors off and on without
 removing them from the output layout or moving their workspaces and windows.
-The bare actions target every configured output. Add a connector name to target
-one monitor:
+The bare actions target every configured output. Add a connector or monitor
+name to target one monitor:
 
 ```sh
 umbriel msg dpms-off
@@ -275,24 +309,6 @@ requests itself.
 Requests that disable an output through this protocol are rejected: the
 protocol commit would bypass the layout and overview handling that the config
 `enabled` key performs. Use `enabled = false` instead.
-
-## Moving focus and windows between outputs
-
-`output-focus-left/right/up/down` move keyboard focus to the adjacent
-monitor in that direction. `window-move-to-output-*` and
-`column-move-to-output-*` move the focused window, or its whole column, to
-the adjacent monitor's active workspace. `workspace-move-to-output-*` instead
-creates a new workspace on the adjacent monitor and moves every window of the
-active workspace into it, preserving column order and widths. See
-[Actions](actions.md) for the full list and their exact semantics.
-
-Whole-column moves between scrolling workspaces retain member order, width,
-full-width restore state, and stacked row proportions. A destination using the
-dwindle layout flattens the moved stack into ordered single-window columns.
-
-Direction is determined from output centers in logical layout coordinates.
-Small overlaps caused by fractional scaling and coordinate rounding therefore
-do not prevent vertically or horizontally arranged outputs from being found.
 
 ## Multi-monitor example
 

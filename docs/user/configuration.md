@@ -72,7 +72,7 @@ honor_restored_maximize = false
 | `mod_key`                 | string       | Super (Alt when nested) | Modifier represented by `Mod` in keybinds. Accepts `Super`, `Alt`, `Ctrl`, or `Shift`; aliases `Logo`, `Win`, and `Control` are also accepted. Applies on reload.                                                                       |
 | `xwayland`                | bool         | `true`                  | Spawn `xwayland-satellite` for X11 app support. The binary must be installed. Changing this requires a restart.                                                                                                                         |
 | `show_cheatsheet`         | bool         | `true`                  | Show the keybinds cheatsheet overlay on startup. If an included file is still missing, Umbriel waits for it to load before showing the overlay. Press any key or mouse button to dismiss, or toggle at runtime via `cheatsheet-toggle`. |
-| `focus_on_activate`       | bool         | `false`                 | Focus and reveal windows that request activation. When false, activation marks the window and its workspace urgent without changing workspaces. Window rules can override this per application.                                         |
+| `focus_on_activate`       | bool         | `false`                 | Let unsolicited activation requests add focus and reveal their target. When false, a mapped target is only marked urgent, while an unmapped target still follows its normal `default_focused` map policy. Tokens issued by `spawn:` and client tokens validated from focused input represent user launch intent and may focus the target. Window rules override this per application. |
 | `honor_restored_maximize` | bool         | `false`                 | Honor maximized state requested by applications before their first buffer maps. The first visible configure then uses the final maximized layout target. A request sent after mapping is a normal runtime maximize request and can resize an already visible window. Later maximize requests are always honored. Applies to newly opened windows. |
 
 ## Environment
@@ -105,6 +105,16 @@ reload does not update environments already captured by running processes.
 Restart Umbriel after changing it, then fully quit and relaunch long-running
 applications such as Steam if they survived the session restart.
 
+## Events
+
+```toml
+[events]
+lid_close = "notify-send 'The laptop lid is closed!'"
+lid_open = "notify-send 'The laptop lid is open!'"
+```
+
+Defines commands that are executed when the laptop lid is closed or opened.
+
 ## Idle inhibition
 
 Umbriel supports application idle inhibitors and idle notifications. An
@@ -114,50 +124,3 @@ workspace, hiding a scratchpad window, disabling its output, or locking the
 session stops honoring that inhibitor until the surface becomes visible
 again. A visible lock surface may provide its own inhibitor while the session
 is locked.
-
-## Configuration topics
-
-Use these pages for detailed topic references:
-
-- [Appearance](appearance.md): colors, borders, blur, and shadows.
-- [Animation](animation.md): transition timing, curves, and event-specific effects.
-- [Workspace Overview](workspace-overview.md): workspace overview and hot corners.
-- [Layout](layout.md): scrolling, dwindle, and master layout behavior.
-- [Input](input.md): keyboard, pointer, tablet, cursor, and focus settings.
-- [Keybinds](keybinds.md): binding syntax, submaps, and binding behavior.
-- [Actions](actions.md): the complete action reference.
-- [Outputs](outputs.md): monitor configuration and output movement.
-- [Workspaces](workspaces.md): workspace models and workspace rules.
-- [Rules](rules.md): window and layer matching.
-
-The detailed sections formerly kept on this page remain reachable through these
-short compatibility links:
-
-## Workspaces
-
-See [Workspaces](workspaces.md) for workspace settings and behavior.
-
-## Colors
-
-See [Appearance](appearance.md) for the color reference.
-
-## Appearance
-
-See [Appearance](appearance.md) for appearance, blur, and shadow settings.
-
-## Animation
-
-See [Animation](animation.md) for transition timing, curves, and event-specific
-effects.
-
-## Overview
-
-See [Workspace Overview](workspace-overview.md) for overview and hot corner settings.
-
-## Layout
-
-See [Layout](layout.md) for layout settings and behavior.
-
-## Input
-
-See [Input](input.md) for input device and focus settings.

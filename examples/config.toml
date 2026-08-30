@@ -16,7 +16,7 @@ autostart = []
 # mod_key = "Super"            # Mod in keybinds; defaults to Super (Alt when nested)
 xwayland = true                # requires restart to change
 show_cheatsheet = true         # show keybinds overlay on startup
-focus_on_activate = false      # activation requests mark urgent without stealing focus
+focus_on_activate = false      # unsolicited requests cannot add focus; trusted launches may still focus
 honor_restored_maximize = false # let apps restore their saved maximized state
 
 # Applied only at session startup. Native sessions also publish these values to
@@ -28,6 +28,11 @@ honor_restored_maximize = false # let apps restore their saved maximized state
 # GTK_THEME = "Adwaita:dark"
 # QT_QPA_PLATFORMTHEME = "qt5ct"
 
+# Defines commands that are executed when the laptop lid is closed or opened.
+# [events]
+# lid_close = "notify-send 'The laptop lid is closed!'"
+# lid_open = "notify-send 'The laptop lid is open!'"
+
 [workspaces]
 back_and_forth = false
 empty_above = false
@@ -35,7 +40,7 @@ empty_above = false
 # Colors ---------------------------------------------------------------------
 
 [colors]
-# background = "#141419F0"
+# background = "#141419FF"
 # text_primary = "#E8E8EAFF"
 # text_muted = "#8A8A92FF"
 # accent_primary = "#7AA3FFFF"
@@ -176,13 +181,22 @@ action = "spawn:notify-send 'Bottom right'"
 mode = "scrolling"             # "scrolling", "dwindle", or "master"
 # Inspect every workspace's effective mode with `umbriel workspaces --json`.
 gap = 8                        # 0-500
-width_presets = [0.333, 0.5, 0.667] # shared by scrolling, dwindle, and master
+width_presets = [0.333, 0.5, 0.667] # width and height cycling, tiled and floating alike
+
+[layout.struts]
+# Signed logical pixels around normal tiled layouts, applied after panels.
+# Negative values expand the tiled area beyond those bounds.
+left = 0                       # -65535 to 65535
+right = 0
+top = 0
+bottom = 0
 
 [layout.scrolling]
 # Vertical workspaces stack horizontal lanes from top to bottom.
 # direction = "horizontal"
 default_width_fraction = 0.5  # remove to let clients choose their initial width
 center_underfull_strip = true  # center the strip whenever it is narrower than the viewport
+center_focused = false # always center the focused column
 expand_single_column = true # fill lone column to viewport width
 
 
@@ -192,17 +206,22 @@ expand_single_column = true # fill lone column to viewport width
 [layout.master]
 position = "left"              # "left" or "right"
 default_width_fraction = 0.55  # 0.1-0.9
+new_on_top = true             # place new windows at the top of the stack
 
 # Workspace layout overrides (see docs/user/workspaces.md#workspace-rules)
 # [[workspace]]
 # name = "chat"
 # layout.mode = "dwindle"
 # layout.gap = 4
+# layout.struts.top = 24       # override one edge and inherit the others
 # layout.scrolling.center_underfull_strip = false
 # layout.dwindle.preserve_split = true
 
 # Outputs (see docs/user/outputs.md) ----------------------------------------
 
+# Named by connector, or by the `Config name` printed by `umbriel outputs`.
+# The monitor form follows the display between machines and ports:
+# [output."Some Make Some Model ABC123"]
 # [output."DP-1"]
 # mode = "2560x1440@144"
 # position = [0, 0]             # logical top-left; omit for automatic placement
@@ -230,6 +249,7 @@ options = ""                   # XKB options, e.g. "grp:alt_shift_toggle"
 repeat_rate = 25               # 0-1000 Hz
 repeat_delay = 600             # 0-10000 ms
 numlock_toggle = true # true enables NumLock when a keyboard connects; false leaves it off
+track_layout = "global"        # "global", or "window" to track the layout per surface
 
 [input.touchpad]
 tap = true                      # enabled by default; false disables tap-to-click
@@ -238,6 +258,7 @@ tap = true                      # enabled by default; false disables tap-to-clic
 # sensitivity = 0.5             # pointer speed, -1.0 to 1.0
 # scroll_factor = 1.5           # touchpad scroll speed, 0.1 to 10.0
 # disable_while_typing = true   # omitted preserves the device's libinput default
+# disable_on_external_mouse = true  # disable the touchpad while an external mouse is connected
 
 [input.mouse]
 # natural_scroll = false
@@ -308,6 +329,8 @@ follows_mouse = false
 "Mod+O" = "overview-toggle"
 # "Mod+Space" is taken above; pick a free chord for layout switching.
 # "Mod+Shift+K" = "keyboard-layout-next"
+# Drag a scrolling workspace directly along its configured axis.
+# "Mod+MouseMiddle" = "layout-scroll-drag"
 # Submaps can nest; entry binds should not repeat. Inspect the active layer with `umbriel submap`.
 # "Mod+R" = { action = "submap:resize", repeat = false }
 # Omit `submap` to add no post-action transition, or set it to "reset" to exit after the action.
@@ -338,6 +361,13 @@ follows_mouse = false
 # "Mod+Shift+O" = "dpms-off"        # new input wakes displays after all are off
 # "Mod+Ctrl+O" = "dpms-off:DP-1"   # stays off while another display is awake
 # "Mod+Minus" = "window-modify-width:-0.1"
+# "Mod+Alt+Minus" = "window-modify-height:-0.1"
+# "Mod+R" = "window-cycle-width"
+# "Mod+Shift+R" = "window-cycle-width-back"
+# "Mod+Alt+R" = "window-cycle-height"
+# "Mod+Alt+Shift+R" = "window-cycle-height-back"
+# "Mod+Grave" = "window-focus-last"
+# "Mod+BackSpace" = "window-consume-or-expel-left"
 # "Mod+C" = "column-center"
 # "Mod+Shift+C" = "window-center"
 # "Mod+Shift+T" = "workspace-set-layout:toggle"
@@ -352,17 +382,32 @@ follows_mouse = false
 # Controls intended to remain usable while the session is locked use the table form.
 # "XF86MonBrightnessDown" = { action = "spawn:noctalia msg brightness-down 10", allow_when_locked = true }
 
-# Window and layer rules (see docs/user/rules.md) ---------------------------
+# Window rules (see docs/user/window-rules.md) ---------------------------
 
 # Blur all windows
 [[window_rule]]
 blur = true
 blur_optimized = true
 
+# Open an app maximized while keeping its parented dialogs at their natural size
+# [[window_rule]]
+# match.app_id = "^example-app$"
+# default_maximize = true
+
 # Open a specific app maximized to the usable-area edges (no gaps or borders)
 # [[window_rule]]
 # match.app_id = "^discord$"
 # default_maximize_to_edges = true
+
+# Match a standardized surface content hint
+# [[window_rule]]
+# match.content_type = "game"
+# vrr = "always"
+
+# Match a client-defined XDG toplevel tag, such as Proton-EM's game tag
+# [[window_rule]]
+# match.xdg_tag = "^proton-game$"
+# default_fullscreen = true
 
 [[window_rule]]
 match.app_id = "^dev.noctalia.Noctalia$"
@@ -373,6 +418,21 @@ default_size = [1020, 900]
 match.app_id = "^dev.noctalia.UmbrielSharePicker$"
 default_floating = true
 default_size = [800, 600]
+
+# Browsers do not expose a semantic PiP role or control global window position.
+[[window_rule]]
+match.title = "^(Picture-in-Picture|Picture in picture)$"
+default_floating = true
+default_maximize = false
+default_position = { x = 20, y = 20, anchor = "bottom_right" }
+
+# Size a float as fractions of the usable area instead of pixels, so the rule
+# suits any monitor. default_size wins on both axes when it is also set.
+# [[window_rule]]
+# match.app_id = "^org[.]example[.]Utility$"
+# default_floating = true
+# default_width = 0.5             # initial width as a fraction of the usable area
+# default_height = 0.6            # initial height as a fraction of the usable area
 
 # [[window_rule]]
 # match.app_id = "firefox"
@@ -385,13 +445,20 @@ default_size = [800, 600]
 # tearing = true                 # force a tearing request; false vetoes the client hint
 # hdr = "fullscreen"            # override the output HDR policy while focused
 
+# Keep tiled windows from several rules in one scrolling column. Lower orders
+# appear higher in horizontal scrolling and farther left in vertical scrolling.
+# [[window_rule]]
+# match.app_id = "^firefox$"
+# default_scrolling_column = "browsers"
+# default_scrolling_column_order = 10
+
 # [[window_rule]]
 # match.title = "^notificationtoasts_.+_desktop"
 # default_position = { x = 0, y = 0, anchor = "bottom_right" }
 # default_focused = false
 # default_pinned = true
 
-# Layer rules (see docs/user/rules.md#layer-rules) ---------------------------
+# Layer rules (see docs/user/layer-rules.md) ---------------------------
 
 [[layer_rule]]
 match.namespace="^noctalia-(bar-[^\"]+|notification|dock|panel|attached-panel|osd)$"

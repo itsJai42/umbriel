@@ -294,6 +294,8 @@ namespace {
     case A::WindowFocusId:
     case A::WindowFocusWarpId:
     case A::WindowFocusSwitchFloating:
+    case A::WindowFocusLast:
+    case A::WorkspaceFocusLast:
       return Group::Focus;
     case A::ColumnMoveLeft:
     case A::ColumnMoveRight:
@@ -309,11 +311,17 @@ namespace {
     case A::WindowMoveOrOutputUp:
     case A::WindowMoveOrOutputDown:
     case A::WindowConsumeLeft:
-    case A::WindowExpelRight:
+    case A::WindowConsumeOrExpelLeft:
+    case A::WindowConsumeRight:
+    case A::WindowConsumeOrExpelRight:
     case A::WindowCycleWidth:
     case A::WindowCycleWidthBack:
     case A::WindowSetWidth:
     case A::WindowModifyWidth:
+    case A::WindowSetHeight:
+    case A::WindowModifyHeight:
+    case A::WindowCycleHeight:
+    case A::WindowCycleHeightBack:
     case A::WindowCenter:
     case A::LayoutScrollLeft:
     case A::LayoutScrollRight:
@@ -403,6 +411,16 @@ namespace {
 } // namespace
 
 namespace umbriel {
+
+  size_t cheatsheetChordColumns(std::string_view chord) {
+    size_t columns = 0;
+    for (const char byte : chord) {
+      if ((static_cast<unsigned char>(byte) & 0xC0U) != 0x80U) {
+        ++columns;
+      }
+    }
+    return columns;
+  }
 
   int columnsNeededFor(std::span<const int> blockSizes, int limit) {
     int columns = 1;

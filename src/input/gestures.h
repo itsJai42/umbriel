@@ -55,24 +55,22 @@ namespace umbriel {
     void finishSwitch(bool cancelled);
     void finishOverview(bool cancelled);
     void silentCancel();
-    [[nodiscard]] bool beginScroll(Workspace* workspace, double factor, ScrollSource source);
+    [[nodiscard]] bool beginScroll(Workspace* workspace, double scale, ScrollSource source);
     void updateScroll(double delta, uint32_t timeMsec);
-
-    // Finger travel that moves the strip by one viewport width.
-    [[nodiscard]] double scrollNormFactor() const;
 
     Server* m_server = nullptr;
     State m_state = State::Idle;
     double m_accumX = 0;
     double m_accumY = 0;
     Output* m_output = nullptr;
+    int m_naturalScrollDirection = 1;
 
     // Scroll state (horizontal 3-finger).
     Workspace* m_scrollWorkspace = nullptr;
     double m_scrollStart = 0;
     bool m_scrollStartCentered = false;
     int m_viewportPrimary = 0;
-    double m_scrollFactor = 1.0;
+    double m_scrollScale = 1.0;
     bool m_scrollVertical = false;
     ScrollSource m_scrollSource = ScrollSource::None;
     SwipeTracker m_scrollTracker;

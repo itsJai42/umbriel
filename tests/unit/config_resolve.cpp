@@ -7,12 +7,22 @@
 #include <vector>
 
 using umbriel::Config;
+using umbriel::ContentType;
 using umbriel::LayerRule;
 using umbriel::LayoutMode;
+using umbriel::OutputIdentity;
 using umbriel::OutputRule;
 using umbriel::VrrMode;
 using umbriel::WindowRule;
 using umbriel::WorkspaceConfig;
+
+namespace {
+  constexpr OutputIdentity identity(
+      std::string_view connector, std::string_view make = {}, std::string_view model = {}, std::string_view serial = {}
+  ) {
+    return {.connector = connector, .make = make, .model = model, .serial = serial};
+  }
+} // namespace
 
 UMBRIEL_TEST(globalLayoutUsesTheCallerOwnedConfig) {
   Config first;
@@ -42,16 +52,21 @@ UMBRIEL_TEST(globalLayoutUsesTheCallerOwnedConfig) {
 UMBRIEL_TEST(workspaceOverridesApplyGlobalThenOutputSpecificRules) {
   Config config;
   config.layout.gap = 8;
+  config.layout.struts = {.left = 1, .right = 2, .top = 3, .bottom = 4};
   config.appearance.borderWidth = 2;
   config.layout.master.position = umbriel::MasterPosition::Right;
   config.layout.master.defaultWidthFraction = 0.58;
+  config.layout.master.newOnTop = false;
   config.layout.dwindle.preserveSplit = true;
 
   WorkspaceConfig global;
   global.name = "dev";
   global.layout.gap = 12;
+  global.layout.struts.left = 10;
+  global.layout.struts.top = 30;
   global.layout.scrolling.defaultWidthFraction = 0.6;
   global.layout.master.defaultWidthFraction = 0.6;
+  global.layout.master.newOnTop = true;
   global.layout.dwindle.preserveSplit = false;
   config.workspaceRules.push_back(std::move(global));
 
@@ -59,9 +74,11 @@ UMBRIEL_TEST(workspaceOverridesApplyGlobalThenOutputSpecificRules) {
   dpOne.name = "dev";
   dpOne.output = "DP-1";
   dpOne.layout.gap = 20;
+  dpOne.layout.struts.right = 20;
   dpOne.layout.mode = LayoutMode::Dwindle;
   dpOne.layout.master.position = umbriel::MasterPosition::Left;
   dpOne.layout.master.defaultWidthFraction = 0.7;
+  dpOne.layout.master.newOnTop = false;
   dpOne.layout.dwindle.preserveSplit = true;
   config.workspaceRules.push_back(std::move(dpOne));
 
@@ -71,33 +88,69 @@ UMBRIEL_TEST(workspaceOverridesApplyGlobalThenOutputSpecificRules) {
   dpTwo.layout.gap = 30;
   config.workspaceRules.push_back(std::move(dpTwo));
 
-  const auto onDpOne = umbriel::resolveWorkspaceLayout(config, "DP-1", "dev", 0);
+  const auto onDpOne = umbriel::resolveWorkspaceLayout(config, identity("DP-1"), "dev", 0);
   CHECK(onDpOne.mode == LayoutMode::Dwindle);
   CHECK_EQ(onDpOne.gap, 20);
   CHECK_EQ(onDpOne.totalGap, 24);
   CHECK_EQ(onDpOne.edgePad, 22);
+  CHECK_EQ(onDpOne.struts.left, 10);
+  CHECK_EQ(onDpOne.struts.right, 20);
+  CHECK_EQ(onDpOne.struts.top, 30);
+  CHECK_EQ(onDpOne.struts.bottom, 4);
   CHECK(onDpOne.scrolling.defaultWidthFraction.has_value());
   CHECK_EQ(*onDpOne.scrolling.defaultWidthFraction, 0.6);
   CHECK(onDpOne.master.position == umbriel::MasterPosition::Left);
   CHECK_EQ(onDpOne.master.defaultWidthFraction, 0.7);
+  CHECK(!onDpOne.master.newOnTop);
   CHECK(onDpOne.dwindle.preserveSplit);
 
-  const auto onDpTwo = umbriel::resolveWorkspaceLayout(config, "DP-2", "dev", 0);
+  const auto onDpTwo = umbriel::resolveWorkspaceLayout(config, identity("DP-2"), "dev", 0);
   CHECK(onDpTwo.mode == LayoutMode::Scrolling);
   CHECK_EQ(onDpTwo.gap, 30);
+  CHECK_EQ(onDpTwo.struts.left, 10);
+  CHECK_EQ(onDpTwo.struts.right, 2);
+  CHECK_EQ(onDpTwo.struts.top, 30);
+  CHECK_EQ(onDpTwo.struts.bottom, 4);
   CHECK(onDpTwo.scrolling.defaultWidthFraction.has_value());
   CHECK_EQ(*onDpTwo.scrolling.defaultWidthFraction, 0.6);
   CHECK(onDpTwo.master.position == umbriel::MasterPosition::Right);
   CHECK_EQ(onDpTwo.master.defaultWidthFraction, 0.6);
+  CHECK(onDpTwo.master.newOnTop);
   CHECK(!onDpTwo.dwindle.preserveSplit);
 
-  const auto elsewhere = umbriel::resolveWorkspaceLayout(config, "HDMI-A-1", "dev", 0);
+  const auto elsewhere = umbriel::resolveWorkspaceLayout(config, identity("HDMI-A-1"), "dev", 0);
   CHECK_EQ(elsewhere.gap, 12);
+  CHECK_EQ(elsewhere.struts.left, 10);
+  CHECK_EQ(elsewhere.struts.right, 2);
+  CHECK_EQ(elsewhere.struts.top, 30);
+  CHECK_EQ(elsewhere.struts.bottom, 4);
   CHECK(elsewhere.scrolling.defaultWidthFraction.has_value());
   CHECK_EQ(*elsewhere.scrolling.defaultWidthFraction, 0.6);
   CHECK(elsewhere.master.position == umbriel::MasterPosition::Right);
   CHECK_EQ(elsewhere.master.defaultWidthFraction, 0.6);
+  CHECK(elsewhere.master.newOnTop);
   CHECK(!elsewhere.dwindle.preserveSplit);
+}
+UMBRIEL_TEST(outputSpecificWorkspaceRulesBeatLaterGlobalRules) {
+  Config config;
+
+  WorkspaceConfig specific;
+  specific.name = "dev";
+  specific.output = "microstep msi g2712f cd6t084401192";
+  specific.layout.gap = 20;
+  config.workspaceRules.push_back(std::move(specific));
+
+  WorkspaceConfig global;
+  global.name = "dev";
+  global.layout.gap = 12;
+  config.workspaceRules.push_back(std::move(global));
+
+  constexpr OutputIdentity monitor = identity("HDMI-A-1", "Microstep", "MSI G2712F", "CD6T084401192");
+  const auto onMonitor = umbriel::resolveWorkspaceLayout(config, monitor, "dev", 0);
+  CHECK_EQ(onMonitor.gap, 20);
+
+  const auto elsewhere = umbriel::resolveWorkspaceLayout(config, identity("DP-1"), "dev", 0);
+  CHECK_EQ(elsewhere.gap, 12);
 }
 
 UMBRIEL_TEST(omittedScrollingDefaultWidthRemainsUnset) {
@@ -106,7 +159,7 @@ UMBRIEL_TEST(omittedScrollingDefaultWidthRemainsUnset) {
   const auto global = umbriel::resolveGlobalLayout(config);
   CHECK(!global.scrolling.defaultWidthFraction.has_value());
 
-  const auto workspace = umbriel::resolveWorkspaceLayout(config, "DP-1", "dev", 0);
+  const auto workspace = umbriel::resolveWorkspaceLayout(config, identity("DP-1"), "dev", 0);
   CHECK(!workspace.scrolling.defaultWidthFraction.has_value());
 }
 
@@ -123,25 +176,73 @@ UMBRIEL_TEST(workspaceInventoryResolvesStaticAndDynamicOutputs) {
   web.layout.gap = 24;
   config.workspaceRules.push_back(std::move(web));
 
-  const auto staticSet = umbriel::resolveWorkspacesForOutput(config, "DP-1");
+  const auto staticSet = umbriel::resolveWorkspacesForOutput(config, identity("DP-1"));
   CHECK(!staticSet.dynamic);
   CHECK_EQ(staticSet.workspaces.size(), size_t{2});
   CHECK_EQ(staticSet.workspaces[0].name, std::string{"main"});
   CHECK_EQ(staticSet.workspaces[1].name, std::string{"web"});
   CHECK_EQ(staticSet.workspaces[1].layout.gap, 24);
 
-  const auto dynamicSet = umbriel::resolveWorkspacesForOutput(config, "DP-2");
+  const auto dynamicSet = umbriel::resolveWorkspacesForOutput(config, identity("DP-2"));
   CHECK(dynamicSet.dynamic);
   CHECK_EQ(dynamicSet.workspaces.size(), size_t{1});
   CHECK_EQ(dynamicSet.workspaces[0].name, std::string{"1"});
 
   config.workspaces.emptyAbove = true;
-  const auto dynamicSetWithEmptyAbove = umbriel::resolveWorkspacesForOutput(config, "DP-2");
+  const auto dynamicSetWithEmptyAbove = umbriel::resolveWorkspacesForOutput(config, identity("DP-2"));
   CHECK(dynamicSetWithEmptyAbove.dynamic);
   CHECK_EQ(dynamicSetWithEmptyAbove.workspaces.size(), size_t{2});
   if (dynamicSetWithEmptyAbove.workspaces.size() == 2) {
     CHECK_EQ(dynamicSetWithEmptyAbove.workspaces[0].name, std::string{"1"});
     CHECK_EQ(dynamicSetWithEmptyAbove.workspaces[1].name, std::string{"2"});
+  }
+}
+UMBRIEL_TEST(workspaceRulesMatchConnectorAndDescriptorWithoutOutputSection) {
+  Config config;
+
+  WorkspaceConfig connector;
+  connector.index = 1;
+  connector.output = "hdmi-a-1";
+  connector.layout.gap = 18;
+  config.workspaceRules.push_back(std::move(connector));
+
+  WorkspaceConfig descriptor;
+  descriptor.index = 1;
+  descriptor.output = "microstep msi g2712f cd6t084401192";
+  descriptor.layout.mode = LayoutMode::Dwindle;
+  config.workspaceRules.push_back(std::move(descriptor));
+
+  constexpr OutputIdentity monitor = identity("HDMI-A-1", "Microstep", "MSI G2712F", "CD6T084401192");
+  const auto resolved = umbriel::resolveWorkspaceLayout(config, monitor, "1", 0);
+  CHECK_EQ(resolved.gap, 18);
+  CHECK(resolved.mode == LayoutMode::Dwindle);
+}
+
+UMBRIEL_TEST(descriptorOutputRuleOverridesConnectorFallback) {
+  Config config;
+
+  OutputRule connector;
+  connector.name = "HDMI-A-1";
+  connector.workspaces = std::vector<std::string>{"fallback"};
+  config.outputs.push_back(std::move(connector));
+
+  OutputRule descriptor;
+  descriptor.name = "Microstep MSI G2712F CD6T084401192";
+  descriptor.workspaces = std::vector<std::string>{"specific"};
+  config.outputs.push_back(std::move(descriptor));
+
+  constexpr OutputIdentity monitor = identity("HDMI-A-1", "Microstep", "MSI G2712F", "CD6T084401192");
+  const OutputRule* selected = umbriel::findOutputRule(config, monitor);
+  CHECK(selected != nullptr);
+  if (selected != nullptr) {
+    CHECK_EQ(selected->name, std::string{"Microstep MSI G2712F CD6T084401192"});
+  }
+
+  const auto resolved = umbriel::resolveWorkspacesForOutput(config, monitor);
+  CHECK(!resolved.dynamic);
+  CHECK_EQ(resolved.workspaces.size(), size_t{1});
+  if (resolved.workspaces.size() == 1) {
+    CHECK_EQ(resolved.workspaces[0].name, std::string{"specific"});
   }
 }
 
@@ -177,6 +278,8 @@ UMBRIEL_TEST(windowRulesMergeMatchingFieldsInOrder) {
   app.blur = true;
   app.defaultFocused = false;
   app.defaultPinned = true;
+  app.defaultScrollingColumn = "browser-stack";
+  app.defaultScrollingColumnOrder = 20;
   app.focusOnActivate = false;
   app.vrr = VrrMode::Disabled;
   app.allowTearing = false;
@@ -197,6 +300,8 @@ UMBRIEL_TEST(windowRulesMergeMatchingFieldsInOrder) {
   title.allowTearing = true;
   title.hdr = umbriel::HdrMode::On;
   title.defaultPinned = false;
+  title.defaultScrollingColumn = "terminals";
+  title.defaultScrollingColumnOrder = 10;
   config.windowRules.push_back(std::move(title));
 
   WindowRule unfocused;
@@ -204,7 +309,7 @@ UMBRIEL_TEST(windowRulesMergeMatchingFieldsInOrder) {
   unfocused.defaultFloating = true;
   config.windowRules.push_back(std::move(unfocused));
 
-  const auto resolved = umbriel::resolveWindowRules(config, "foot", "project shell", false);
+  const auto resolved = umbriel::resolveWindowRules(config, "foot", "project shell", "", ContentType::None, false);
   CHECK(resolved.opacity && *resolved.opacity == 0.8);
   CHECK(resolved.blur && *resolved.blur);
   CHECK(resolved.defaultFloating && *resolved.defaultFloating);
@@ -214,21 +319,156 @@ UMBRIEL_TEST(windowRulesMergeMatchingFieldsInOrder) {
   CHECK(resolved.defaultPosition->anchor == umbriel::WindowPositionAnchor::TopRight);
   CHECK(resolved.defaultFocused && !*resolved.defaultFocused);
   CHECK(resolved.defaultPinned && !*resolved.defaultPinned);
+  CHECK(resolved.defaultScrollingColumn && *resolved.defaultScrollingColumn == "terminals");
+  CHECK(resolved.defaultScrollingColumnOrder && *resolved.defaultScrollingColumnOrder == 10);
   CHECK(resolved.focusOnActivate && *resolved.focusOnActivate);
   CHECK(resolved.vrr == VrrMode::Always);
   CHECK(resolved.allowTearing && *resolved.allowTearing);
   CHECK(resolved.hdr == umbriel::HdrMode::On);
 
-  const auto appOnly = umbriel::resolveWindowRules(config, "foot", "editor", false);
+  const auto appOnly = umbriel::resolveWindowRules(config, "foot", "editor", "", ContentType::None, false);
   CHECK(appOnly.defaultPinned && *appOnly.defaultPinned);
+  CHECK(appOnly.defaultScrollingColumn && *appOnly.defaultScrollingColumn == "browser-stack");
+  CHECK(appOnly.defaultScrollingColumnOrder && *appOnly.defaultScrollingColumnOrder == 20);
   CHECK(appOnly.vrr == VrrMode::Disabled);
   CHECK(appOnly.allowTearing && !*appOnly.allowTearing);
   CHECK(appOnly.hdr == umbriel::HdrMode::Off);
 
-  const auto focused = umbriel::resolveWindowRules(config, "foot", "project shell", true);
+  const auto focused = umbriel::resolveWindowRules(config, "foot", "project shell", "", ContentType::None, true);
   CHECK(focused.opacity && *focused.opacity == 0.8);
   CHECK(!focused.defaultFloating);
   CHECK(umbriel::anyWindowRuleHasTitlePattern(config));
+}
+
+UMBRIEL_TEST(windowRulesMergeFractionSizingLastWriterWins) {
+  Config config;
+
+  WindowRule first;
+  first.appIdPattern = "^utility$";
+  first.appIdRegex = std::regex(first.appIdPattern);
+  first.defaultFloating = true;
+  first.defaultWidth = 0.5;
+  first.defaultHeight = 0.6;
+  config.windowRules.push_back(std::move(first));
+
+  WindowRule second;
+  second.appIdPattern = "^utility$";
+  second.appIdRegex = std::regex(second.appIdPattern);
+  second.defaultWidth = 0.75;
+  config.windowRules.push_back(std::move(second));
+
+  const auto resolved = umbriel::resolveWindowRules(config, "utility", "", "", ContentType::None, false);
+  CHECK(resolved.defaultFloating && *resolved.defaultFloating);
+  // Later rules overwrite only the fields they set.
+  CHECK(resolved.defaultWidth && *resolved.defaultWidth == 0.75);
+  CHECK(resolved.defaultHeight && *resolved.defaultHeight == 0.6);
+}
+
+UMBRIEL_TEST(windowRulesMatchContentTypesAndComposeSelectors) {
+  Config config;
+
+  WindowRule photo;
+  photo.matchContentType = ContentType::Photo;
+  photo.opacity = 0.25;
+  config.windowRules.push_back(std::move(photo));
+
+  WindowRule game;
+  game.appIdPattern = "^runner$";
+  game.appIdRegex = std::regex(game.appIdPattern);
+  game.titlePattern = "playing";
+  game.titleRegex = std::regex(game.titlePattern);
+  game.matchContentType = ContentType::Game;
+  game.matchFocused = false;
+  game.opacity = 0.75;
+  config.windowRules.push_back(std::move(game));
+
+  WindowRule none;
+  none.matchContentType = ContentType::None;
+  none.defaultFloating = true;
+  config.windowRules.push_back(std::move(none));
+
+  const auto matchingGame = umbriel::resolveWindowRules(config, "runner", "now playing", "", ContentType::Game, false);
+  CHECK(matchingGame.opacity && *matchingGame.opacity == 0.75);
+
+  const auto wrongApp = umbriel::resolveWindowRules(config, "launcher", "now playing", "", ContentType::Game, false);
+  CHECK(!wrongApp.opacity);
+  const auto wrongTitle = umbriel::resolveWindowRules(config, "runner", "paused", "", ContentType::Game, false);
+  CHECK(!wrongTitle.opacity);
+  const auto wrongFocus = umbriel::resolveWindowRules(config, "runner", "now playing", "", ContentType::Game, true);
+  CHECK(!wrongFocus.opacity);
+
+  const auto matchingPhoto = umbriel::resolveWindowRules(config, "viewer", "photo", "", ContentType::Photo, false);
+  CHECK(matchingPhoto.opacity && *matchingPhoto.opacity == 0.25);
+
+  const auto matchingNone = umbriel::resolveWindowRules(config, "terminal", "shell", "", ContentType::None, false);
+  CHECK(matchingNone.defaultFloating && *matchingNone.defaultFloating);
+
+  const auto video = umbriel::resolveWindowRules(config, "viewer", "video", "", ContentType::Video, false);
+  CHECK(!video.opacity);
+  CHECK(!video.defaultFloating);
+}
+
+UMBRIEL_TEST(windowRulesMatchXdgTagsAndComposeSelectors) {
+  Config config;
+
+  WindowRule anyGameTag;
+  anyGameTag.xdgTagPattern = "^game-";
+  anyGameTag.xdgTagRegex = std::regex(anyGameTag.xdgTagPattern);
+  anyGameTag.opacity = 0.25;
+  config.windowRules.push_back(std::move(anyGameTag));
+
+  WindowRule launcher;
+  launcher.xdgTagPattern = "^game-launcher$";
+  launcher.xdgTagRegex = std::regex(launcher.xdgTagPattern);
+  launcher.opacity = 0.9;
+  launcher.defaultFloating = true;
+  config.windowRules.push_back(std::move(launcher));
+
+  WindowRule running;
+  running.appIdPattern = "^runner$";
+  running.appIdRegex = std::regex(running.appIdPattern);
+  running.titlePattern = "playing";
+  running.titleRegex = std::regex(running.titlePattern);
+  running.xdgTagPattern = "^game-(running|settings)$";
+  running.xdgTagRegex = std::regex(running.xdgTagPattern);
+  running.matchContentType = ContentType::Game;
+  running.matchFocused = false;
+  running.opacity = 0.5;
+  config.windowRules.push_back(std::move(running));
+
+  const auto matchingLauncher =
+      umbriel::resolveWindowRules(config, "runner", "now playing", "game-launcher", ContentType::Game, false);
+  CHECK(matchingLauncher.opacity && *matchingLauncher.opacity == 0.9);
+  CHECK(matchingLauncher.defaultFloating && *matchingLauncher.defaultFloating);
+
+  const auto matchingRunning =
+      umbriel::resolveWindowRules(config, "runner", "now playing", "game-running", ContentType::Game, false);
+  CHECK(matchingRunning.opacity && *matchingRunning.opacity == 0.5);
+
+  const auto matchingSecondTag =
+      umbriel::resolveWindowRules(config, "runner", "now playing", "game-settings", ContentType::Game, false);
+  CHECK(matchingSecondTag.opacity && *matchingSecondTag.opacity == 0.5);
+
+  const auto wrongApp =
+      umbriel::resolveWindowRules(config, "launcher", "now playing", "game-running", ContentType::Game, false);
+  CHECK(wrongApp.opacity && *wrongApp.opacity == 0.25);
+  const auto wrongTitle =
+      umbriel::resolveWindowRules(config, "runner", "paused", "game-running", ContentType::Game, false);
+  CHECK(wrongTitle.opacity && *wrongTitle.opacity == 0.25);
+  const auto wrongContent =
+      umbriel::resolveWindowRules(config, "runner", "now playing", "game-running", ContentType::Video, false);
+  CHECK(wrongContent.opacity && *wrongContent.opacity == 0.25);
+  const auto wrongFocus =
+      umbriel::resolveWindowRules(config, "runner", "now playing", "game-running", ContentType::Game, true);
+  CHECK(wrongFocus.opacity && *wrongFocus.opacity == 0.25);
+
+  const auto missingTag = umbriel::resolveWindowRules(config, "runner", "now playing", "", ContentType::Game, false);
+  CHECK(!missingTag.opacity);
+  CHECK(!missingTag.defaultFloating);
+  const auto unknownTag =
+      umbriel::resolveWindowRules(config, "runner", "now playing", "browser", ContentType::Game, false);
+  CHECK(!unknownTag.opacity);
+  CHECK(!unknownTag.defaultFloating);
 }
 
 UMBRIEL_TEST(windowVrrRuleOverridesTheOutputPolicy) {

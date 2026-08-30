@@ -31,6 +31,26 @@ namespace umbriel {
     Right,
   };
 
+  struct LayoutStruts {
+    int left = 0;
+    int right = 0;
+    int top = 0;
+    int bottom = 0;
+    bool operator==(const LayoutStruts&) const = default;
+  };
+
+  struct LayoutStrutOverrides {
+    std::optional<int> left;
+    std::optional<int> right;
+    std::optional<int> top;
+    std::optional<int> bottom;
+    bool operator==(const LayoutStrutOverrides&) const = default;
+  };
+
+  // Apply the configured tiled-layout inset after layer-shell exclusive zones.
+  // Negative values deliberately expand the area beyond those bounds.
+  [[nodiscard]] wlr_box applyLayoutStruts(const wlr_box& area, const LayoutStruts& struts);
+
   using LayoutMemberId = uint32_t;
 
   struct LayoutMember {
@@ -150,8 +170,8 @@ namespace umbriel {
 
     virtual void insertView(View* view, int columnIndex) = 0;
     virtual void insertViewIntoColumn(View* view, int columnIndex, int rowIndex) = 0;
-    virtual bool consumeLeft(View* view) = 0;
-    virtual bool expelRight(View* view) = 0;
+    virtual bool consume(View* view, int direction) = 0;
+    virtual bool expel(View* view, int direction) = 0;
     virtual bool moveViewVertical(View* view, int direction) = 0;
     virtual bool swapViews(View* a, View* b) = 0;
     virtual void removeView(View* view) = 0;
@@ -185,6 +205,12 @@ namespace umbriel {
     virtual bool setWidthFraction(int columnIndex, double fraction) = 0;
     virtual void clearFullWidthState(int columnIndex) = 0;
     [[nodiscard]] virtual double widthFraction(int columnIndex) const = 0;
+
+    // Height of `view` as a fraction of its column's stacking extent. 1.0 when the
+    // view is alone on its stacking axis.
+    [[nodiscard]] virtual double heightFraction(const View* view) const = 0;
+    // Returns false when the view is not tiled here or is alone on its stacking axis.
+    virtual bool setHeightFraction(View* view, double fraction) = 0;
 
     // Interactive resize
     // Edges grabbable at a pointer position (0 = none). Base = not resizable.
