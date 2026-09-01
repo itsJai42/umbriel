@@ -417,6 +417,30 @@ UMBRIEL_TEST(horizontalResizeRecentersAnUnderfullStripImmediately) {
   );
 }
 
+UMBRIEL_TEST(leftwardResizeGrowsCurrentColumnAfterPreviousHitsMinimumWidth) {
+  Fixture fixture;
+  fixture.addColumns(2);
+  fixture.layout.setConstraints([](const View* view) {
+    return LayoutConstraints{.minWidth = view == stub(0) ? 900 : 1};
+  });
+  fixture.layout.arrange(kUsable);
+
+  const wlr_box previousBefore = fixture.layout.targetBox(stub(0));
+  const wlr_box currentBefore = fixture.layout.targetBox(stub(1));
+  CHECK_EQ(previousBefore.width, 900);
+
+  auto resize = fixture.layout.beginResize(stub(1), WLR_EDGE_LEFT, kUsable);
+  CHECK(resize != nullptr);
+  resize->applyDelta(-100.0, 0.0, kUsable);
+  fixture.layout.arrange(kUsable);
+
+  const wlr_box previousAfter = fixture.layout.targetBox(stub(0));
+  const wlr_box currentAfter = fixture.layout.targetBox(stub(1));
+  CHECK_EQ(previousAfter.width, previousBefore.width);
+  CHECK_EQ(currentAfter.x, currentBefore.x);
+  CHECK(currentAfter.width > currentBefore.width);
+}
+
 UMBRIEL_TEST(middleOfPartiallyOffscreenColumnGrabsNothing) {
   Fixture fixture;
   fixture.addColumns(2);

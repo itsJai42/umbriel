@@ -1012,11 +1012,14 @@ namespace umbriel {
             const int minCur = columnMinPrimary(m_column);
             const int maxPrev = columnMaxPrimary(m_column - 1);
             const int maxCur = columnMaxPrimary(m_column);
-            const int newPrev = std::clamp(
-                m_startPrevPrimaryPx + static_cast<int>(std::lround(dPrimary)), std::max(minPrev, pair - gap - maxCur),
-                std::min(maxPrev, pair - gap - minCur)
-            );
-            const int newCur = pair - gap - newPrev;
+            const int requestedPrev = m_startPrevPrimaryPx + static_cast<int>(std::lround(dPrimary));
+            const int minimumPrev = std::max(minPrev, pair - gap - maxCur);
+            const int maximumPrev = std::min(maxPrev, pair - gap - minCur);
+            const int newPrev = std::clamp(requestedPrev, minimumPrev, maximumPrev);
+            int newCur = pair - gap - newPrev;
+            if (requestedPrev < minimumPrev && minimumPrev == minPrev) {
+              newCur = std::min(m_startPrimaryPx - static_cast<int>(std::lround(dPrimary)), maxCur);
+            }
             setColumnPrimaryPx(m_column - 1, newPrev);
             setColumnPrimaryPx(m_column, newCur);
           } else {
