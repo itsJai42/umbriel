@@ -1020,8 +1020,9 @@ namespace umbriel {
             if (requestedPrev < minimumPrev && minimumPrev == minPrev) {
               newCur = std::min(m_startPrimaryPx - static_cast<int>(std::lround(dPrimary)), maxCur);
               layout.setScroll(
-                  m_startScroll + static_cast<double>(layout.columnX(m_column, viewportPrimary) - m_startColumnX)
-                  + static_cast<double>(newCur - m_startPrimaryPx),
+                  m_startScroll
+                      + static_cast<double>(layout.columnX(m_column, viewportPrimary) - m_startColumnX)
+                      + static_cast<double>(newCur - m_startPrimaryPx),
                   true
               );
             }
