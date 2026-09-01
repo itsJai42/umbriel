@@ -427,6 +427,7 @@ UMBRIEL_TEST(leftwardResizeGrowsCurrentColumnAfterPreviousHitsMinimumWidth) {
 
   const wlr_box previousBefore = fixture.layout.targetBox(stub(0));
   const wlr_box currentBefore = fixture.layout.targetBox(stub(1));
+  const int currentRightBefore = currentBefore.x + currentBefore.width;
   CHECK_EQ(previousBefore.width, 900);
 
   auto resize = fixture.layout.beginResize(stub(1), WLR_EDGE_LEFT, kUsable);
@@ -437,7 +438,8 @@ UMBRIEL_TEST(leftwardResizeGrowsCurrentColumnAfterPreviousHitsMinimumWidth) {
   const wlr_box previousAfter = fixture.layout.targetBox(stub(0));
   const wlr_box currentAfter = fixture.layout.targetBox(stub(1));
   CHECK_EQ(previousAfter.width, previousBefore.width);
-  CHECK_EQ(currentAfter.x, currentBefore.x);
+  CHECK(currentAfter.x < currentBefore.x);
+  CHECK_EQ(currentAfter.x + currentAfter.width, currentRightBefore);
   CHECK(currentAfter.width > currentBefore.width);
 }
 

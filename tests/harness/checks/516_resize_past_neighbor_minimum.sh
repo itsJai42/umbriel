@@ -31,8 +31,8 @@ wait_for_window() {
 }
 
 foot --title=resize-min-a sh -c 'sleep 120' > /dev/null 2>&1 &
-foot --title=resize-min-b sh -c 'sleep 120' > /dev/null 2>&1 &
 wait_for_window resize-min-a
+foot --title=resize-min-b sh -c 'sleep 120' > /dev/null 2>&1 &
 wait_for_window resize-min-b
 
 a=$(window resize-min-a)
@@ -56,11 +56,15 @@ pointer move "$(jq -r '.x + 20 | floor' <<< "$b_before")" "$(jq -r '.y + .h / 2 
 for _ in $(seq 60); do
   a=$(window resize-min-a)
   b_after=$(window resize-min-b)
-  [[ $(jq -r '.w' <<< "$a") -eq 189 && $(jq -r '.w' <<< "$b_after") -gt $(jq -r '.w' <<< "$b_before") ]] && break
+  [[ $(jq -r '.w' <<< "$a") -eq 189 \
+    && $(jq -r '.x' <<< "$b_after") -lt $(jq -r '.x' <<< "$b_before") \
+    && $(jq -r '.x + .w' <<< "$b_after") -le $(jq -r '.x + .w' <<< "$b_before") ]] && break
   sleep 0.1
 done
 
-if [[ $(jq -r '.w' <<< "$a") -ne 189 || $(jq -r '.w' <<< "$b_after") -le $(jq -r '.w' <<< "$b_before") ]]; then
+if [[ $(jq -r '.w' <<< "$a") -ne 189 \
+  || $(jq -r '.x' <<< "$b_after") -ge $(jq -r '.x' <<< "$b_before") \
+  || $(jq -r '.x + .w' <<< "$b_after") -gt $(jq -r '.x + .w' <<< "$b_before") ]]; then
   echo "leftward resize did not grow B after A reached minimum: before=$b_before after=$b_after windows=$($UMBRIEL windows --json)"
   exit 1
 fi
