@@ -1017,8 +1017,13 @@ namespace umbriel {
             const int maximumPrev = std::min(maxPrev, pair - gap - minCur);
             const int newPrev = std::clamp(requestedPrev, minimumPrev, maximumPrev);
             int newCur = pair - gap - newPrev;
-            if (requestedPrev < minimumPrev && minimumPrev == minPrev) {
+            const bool growsPastPreviousMinimum = requestedPrev < minimumPrev && minimumPrev == minPrev;
+            if (growsPastPreviousMinimum) {
               newCur = std::min(m_startPrimaryPx - static_cast<int>(std::lround(dPrimary)), maxCur);
+            }
+            setColumnPrimaryPx(m_column - 1, newPrev);
+            setColumnPrimaryPx(m_column, newCur);
+            if (growsPastPreviousMinimum) {
               layout.setScroll(
                   m_startScroll
                       + static_cast<double>(layout.columnX(m_column, viewportPrimary) - m_startColumnX)
@@ -1026,8 +1031,6 @@ namespace umbriel {
                   true
               );
             }
-            setColumnPrimaryPx(m_column - 1, newPrev);
-            setColumnPrimaryPx(m_column, newCur);
           } else {
             const double extentDelta = centerUnderfullStrip ? centeredPrimaryDelta(-dPrimary) : -dPrimary;
             const int newExtent = std::clamp(

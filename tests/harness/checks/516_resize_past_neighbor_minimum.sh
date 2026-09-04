@@ -58,13 +58,13 @@ for _ in $(seq 60); do
   b_after=$(window resize-min-b)
   [[ $(jq -r '.w' <<< "$a") -eq 189 \
     && $(jq -r '.x' <<< "$b_after") -lt $(jq -r '.x' <<< "$b_before") \
-    && $(jq -r '.x + .w' <<< "$b_after") -le $(jq -r '.x + .w' <<< "$b_before") ]] && break
+    && $(jq -r '.x + .w' <<< "$b_after") -eq $(jq -r '.x + .w' <<< "$b_before") ]] && break
   sleep 0.1
 done
 
 if [[ $(jq -r '.w' <<< "$a") -ne 189 \
   || $(jq -r '.x' <<< "$b_after") -ge $(jq -r '.x' <<< "$b_before") \
-  || $(jq -r '.x + .w' <<< "$b_after") -gt $(jq -r '.x + .w' <<< "$b_before") ]]; then
+  || $(jq -r '.x + .w' <<< "$b_after") -ne $(jq -r '.x + .w' <<< "$b_before") ]]; then
   echo "leftward resize did not grow B after A reached minimum: before=$b_before after=$b_after windows=$($UMBRIEL windows --json)"
   exit 1
 fi
